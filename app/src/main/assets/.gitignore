@@ -1,0 +1,5 @@
+# Ignore ONNX model files (too large for git)
+*.onnx
+
+# But keep this README
+!README.md

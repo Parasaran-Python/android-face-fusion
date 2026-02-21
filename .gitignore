@@ -1,0 +1,26 @@
+# Android build
+*.iml
+.gradle
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Android Studio / IntelliJ
+.idea/
+local.properties
+
+# ONNX models (too large for git — auto-downloaded at runtime)
+*.onnx
+
+# Extracted EMAP in project root (working copy from extract_emap.py)
+# The real one lives in app/src/main/assets/emap.bin
+/emap.bin
+
+# Claude Code
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
