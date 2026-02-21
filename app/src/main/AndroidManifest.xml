@@ -32,6 +32,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ImagePreviewActivity"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:screenOrientation="unspecified" />
     </application>
 
 </manifest>
