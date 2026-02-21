@@ -422,17 +422,18 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        progressBar.setVisibility(View.VISIBLE);
         btnProcess.setEnabled(false);
         resultCard.setVisibility(View.GONE);
+        showOverlay("Swapping Faces", "Detecting faces...");
 
         executorService.execute(() -> {
             try {
+                runOnUiThread(() -> updateOverlay("Processing face swap...", -1));
                 Bitmap result = processor.processFaceFusion(sourceBitmap, targetBitmap);
                 resultBitmap = result;
 
                 runOnUiThread(() -> {
-                    progressBar.setVisibility(View.GONE);
+                    hideOverlay();
                     btnProcess.setEnabled(true);
                     resultImageView.setImageBitmap(result);
                     resultCard.setVisibility(View.VISIBLE);
@@ -441,7 +442,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 e.printStackTrace();
                 runOnUiThread(() -> {
-                    progressBar.setVisibility(View.GONE);
+                    hideOverlay();
                     btnProcess.setEnabled(true);
                     showError("Face fusion failed: " + e.getMessage());
                 });
