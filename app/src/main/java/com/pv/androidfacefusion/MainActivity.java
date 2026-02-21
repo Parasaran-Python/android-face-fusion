@@ -48,7 +48,7 @@ public class MainActivity extends AppCompatActivity {
     private ImageView sourceImageView, targetImageView, resultImageView;
     private MaterialButton btnSelectSourceLocal, btnSelectSourceUrl;
     private MaterialButton btnSelectTargetLocal, btnSelectTargetUrl;
-    private MaterialButton btnProcess, btnSaveResult;
+    private MaterialButton btnProcess, btnSaveResult, btnReset;
     private LinearProgressIndicator progressBar;
     private MaterialCardView resultCard;
 
@@ -99,6 +99,7 @@ public class MainActivity extends AppCompatActivity {
         btnSelectTargetLocal = findViewById(R.id.btnSelectTargetLocal);
         btnSelectTargetUrl = findViewById(R.id.btnSelectTargetUrl);
         btnProcess = findViewById(R.id.btnProcess);
+        btnReset = findViewById(R.id.btnReset);
         btnSaveResult = findViewById(R.id.btnSaveResult);
 
         progressBar = findViewById(R.id.progressBar);
@@ -274,6 +275,8 @@ public class MainActivity extends AppCompatActivity {
 
         btnProcess.setOnClickListener(v -> processFaceFusion());
 
+        btnReset.setOnClickListener(v -> resetSession());
+
         btnSaveResult.setOnClickListener(v -> saveResult());
 
         // Image preview on tap
@@ -286,6 +289,17 @@ public class MainActivity extends AppCompatActivity {
         if (bitmap == null) return;
         ImagePreviewActivity.setPendingBitmap(bitmap);
         startActivity(new Intent(this, ImagePreviewActivity.class));
+    }
+
+    private void resetSession() {
+        if (sourceBitmap != null) { sourceBitmap.recycle(); sourceBitmap = null; }
+        if (targetBitmap != null) { targetBitmap.recycle(); targetBitmap = null; }
+        if (resultBitmap != null) { resultBitmap.recycle(); resultBitmap = null; }
+
+        sourceImageView.setImageDrawable(null);
+        targetImageView.setImageDrawable(null);
+        resultImageView.setImageDrawable(null);
+        resultCard.setVisibility(View.GONE);
     }
 
     private void openImagePicker() {
