@@ -122,7 +122,6 @@ if __name__ == '__main__':
         'inswapper_128.onnx',
         '../inswapper_128.onnx',
         'models/inswapper_128.onnx',
-        'D:/Code/ONNX_learn/FaceFusion/inswapper_128.onnx',
     ]
     
     model_path = None

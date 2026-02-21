@@ -73,6 +73,23 @@ app/src/main/java/com/pv/androidfacefusion/
 - [Glide](https://github.com/bumptech/glide) - URL image loading
 - [Material Components](https://material.io/develop/android) - UI
 
+## License
+
+This project's source code is licensed under the [MIT License](LICENSE).
+
+**Important:** The AI models (SCRFD, ArcFace, INSwapper) downloaded at runtime are provided by [InsightFace](https://github.com/deepinsight/insightface) and are subject to their own **non-commercial research license**. You must comply with InsightFace's licensing terms when using these models. This project does not redistribute the models — they are downloaded directly from HuggingFace by the end user.
+
+## Disclaimer
+
+This project is for **educational and research purposes only**. Face swapping technology can be misused. By using this software, you agree to:
+
+- Only use it on images where you have consent from all individuals depicted
+- Not use it to create deceptive, harmful, or non-consensual content
+- Comply with all applicable laws and regulations in your jurisdiction
+- Take full responsibility for how you use the output
+
+The authors are not responsible for any misuse of this software.
+
 ## Credits
 
 - [FaceFusion](https://github.com/facefusion/facefusion) - Original Python implementation
