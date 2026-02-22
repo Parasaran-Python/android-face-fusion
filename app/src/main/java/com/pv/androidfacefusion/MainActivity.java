@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -25,6 +26,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -35,9 +37,11 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -48,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
     private ImageView sourceImageView, targetImageView, resultImageView;
     private MaterialButton btnSelectSourceLocal, btnSelectSourceUrl;
     private MaterialButton btnSelectTargetLocal, btnSelectTargetUrl;
-    private MaterialButton btnProcess, btnSaveResult, btnReset;
+    private MaterialButton btnProcess, btnSaveResult, btnShareResult, btnReset;
     private LinearProgressIndicator progressBar;
     private MaterialCardView resultCard;
 
@@ -101,6 +105,7 @@ public class MainActivity extends AppCompatActivity {
         btnProcess = findViewById(R.id.btnProcess);
         btnReset = findViewById(R.id.btnReset);
         btnSaveResult = findViewById(R.id.btnSaveResult);
+        btnShareResult = findViewById(R.id.btnShareResult);
 
         progressBar = findViewById(R.id.progressBar);
         resultCard = findViewById(R.id.resultCard);
@@ -278,6 +283,7 @@ public class MainActivity extends AppCompatActivity {
         btnReset.setOnClickListener(v -> resetSession());
 
         btnSaveResult.setOnClickListener(v -> saveResult());
+        btnShareResult.setOnClickListener(v -> shareResult());
 
         // Image preview on tap
         sourceImageView.setOnClickListener(v -> openImagePreview(sourceBitmap));
@@ -470,18 +476,20 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // Check permission
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-            return;
+        // WRITE_EXTERNAL_STORAGE is only needed on Android 9 (API 28) and below.
+        // On Android 10+ (API 29+), MediaStore API works without this permission.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+                return;
+            }
         }
 
         executorService.execute(() -> {
             try {
                 String fileName = "face_fusion_" + System.currentTimeMillis() + ".jpg";
 
-                // Save using MediaStore (Android 10+)
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
                 values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
@@ -489,7 +497,7 @@ public class MainActivity extends AppCompatActivity {
 
                 Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
                 if (uri != null) {
-                    FileOutputStream out = (FileOutputStream) getContentResolver().openOutputStream(uri);
+                    OutputStream out = getContentResolver().openOutputStream(uri);
                     resultBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
                     out.close();
 
@@ -500,6 +508,40 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 e.printStackTrace();
                 runOnUiThread(() -> showError("Failed to save image: " + e.getMessage()));
+            }
+        });
+    }
+
+    private void shareResult() {
+        if (resultBitmap == null) {
+            Toast.makeText(this, "No result to share", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                // Save bitmap to a temp file in cache for sharing
+                File shareDir = new File(getCacheDir(), "shared_images");
+                if (!shareDir.exists()) shareDir.mkdirs();
+                File shareFile = new File(shareDir, "face_fusion_share.jpg");
+
+                FileOutputStream out = new FileOutputStream(shareFile);
+                resultBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
+                out.close();
+
+                Uri contentUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", shareFile);
+
+                runOnUiThread(() -> {
+                    Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                    shareIntent.setType("image/jpeg");
+                    shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+                    shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(shareIntent, "Share Face Fusion Result"));
+                });
+            } catch (Exception e) {
+                e.printStackTrace();
+                runOnUiThread(() -> showError("Failed to share image: " + e.getMessage()));
             }
         });
     }
