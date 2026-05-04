@@ -7,11 +7,12 @@ import android.util.Log;
 import java.io.File;
 import java.nio.FloatBuffer;
 
+import java.util.EnumSet;
+
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
-
 import ai.onnxruntime.OrtSession.SessionOptions;
 import ai.onnxruntime.providers.NNAPIFlags;
 
@@ -34,21 +35,20 @@ public class FaceEmbedder {
 
     public void initialize() throws Exception {
         try {
-            // Download model if needed and load from file path directly
-            Log.d(TAG, "Loading face embedding model...");
-            ModelDownloader downloader = new ModelDownloader(context);
+            // however you currently obtain the model file...
             File modelFile = downloader.getModelFile("w600k_r50.onnx");
-            
-            Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
-            
-            // Load directly from file path to avoid OOM with large files
-            session = env.createSession(modelFile.getAbsolutePath());
-            Log.d(TAG, "Face embedding model initialized successfully");
+    
+            env = OrtEnvironment.getEnvironment();
+    
+            SessionOptions opts = createNnapiSessionOptions();
+            session = env.createSession(modelFile.getAbsolutePath(), opts);
+    
+            Log.i(TAG, "ArcFace session created with NNAPI options");
         } catch (Exception e) {
-            Log.e(TAG, "Error loading face embedding model", e);
-            throw new Exception("Failed to load face embedding model: " + e.getMessage());
+            Log.e(TAG, "Failed to initialize FaceEmbedder", e);
+            throw e;
         }
-    }
+    } 
 
     public float[] getEmbedding(Bitmap faceBitmap) throws OrtException {
         if (session == null) {
@@ -131,6 +131,16 @@ public class FaceEmbedder {
         return output;
     }
 
+    private static OrtSession.SessionOptions createNnapiSessionOptions() throws OrtException {
+        OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+    
+        // FP16 relaxation is a standard NNAPI perf option
+        opts.addNnapi(EnumSet.of(NNAPIFlags.USE_FP16));
+    
+        opts.setOptimizationLevel(SessionOptions.OptLevel.ALL_OPT);
+        return opts;
+    }
+    
     public void close() {
         if (session != null) {
             try {
