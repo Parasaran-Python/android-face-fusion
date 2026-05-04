@@ -604,19 +604,18 @@ public class FaceDetector {
     }
 
     private static OrtSession.SessionOptions createNnapiSessionOptions() throws OrtException {
-    OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-
-    int flags =
-            NNAPIFlags.USE_FP16 |
-            NNAPIFlags.ALLOW_CPU_FALLBACK;
-
-    opts.addNnapi(flags);
-
-    opts.setOptimizationLevel(
-            OrtSession.SessionOptions.OptLevel.ALL_OPT
-    );
-    return opts;
+        OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+    
+        // NNAPI flags on Android are an EnumSet, not bit flags
+        opts.addNnapi(EnumSet.of(NNAPIFlags.USE_FP16));
+    
+        opts.setOptimizationLevel(
+                OrtSession.SessionOptions.OptLevel.ALL_OPT
+        );
+    
+        return opts;
     }
+ }
     
     public void close() {
         if (session != null) {
