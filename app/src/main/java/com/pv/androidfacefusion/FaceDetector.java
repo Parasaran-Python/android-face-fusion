@@ -595,6 +595,21 @@ public class FaceDetector {
         return intersectArea / unionArea;
     }
 
+    private static OrtSession.SessionOptions createNnapiSessionOptions() throws OrtException {
+    OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+
+    int flags =
+            NNAPIFlags.USE_FP16 |
+            NNAPIFlags.ALLOW_CPU_FALLBACK;
+
+    opts.addNnapi(flags);
+
+    opts.setOptimizationLevel(
+            OrtSession.SessionOptions.OptLevel.ALL_OPT
+    );
+    return opts;
+    }
+    
     public void close() {
         if (session != null) {
             try {
