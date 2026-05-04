@@ -54,19 +54,15 @@ public class FaceDetector {
             ModelDownloader downloader = new ModelDownloader(context);
             File modelFile = downloader.getModelFile("det_10g.onnx");
     
-            // 1. Create ORT environment
             env = OrtEnvironment.getEnvironment();
     
-            // 2. Use NNAPI-enabled SessionOptions (your helper method)
             SessionOptions opts = createNnapiSessionOptions();
     
             Log.i(TAG, "Creating SCRFD session with NNAPI");
     
-            // 3. Create the ONNX Runtime session
             session = env.createSession(modelFile.getAbsolutePath(), opts);
     
-            // 4. Log which execution providers are actually in use
-            Log.i(TAG, "SCRFD session providers: " + session.getProviders());
+            Log.i(TAG, "SCRFD session created");
     
         } catch (Exception e) {
             Log.e(TAG, "Failed to initialize FaceDetector", e);
