@@ -15,6 +15,11 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 
+import ai.onnxruntime.OrtSession.SessionOptions;
+import ai.onnxruntime.providers.NNAPIFlags;
+
+
+
 /**
  * Face detector using ONNX model (similar to InsightFace detection)
  */
