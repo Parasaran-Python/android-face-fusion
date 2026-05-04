@@ -611,7 +611,6 @@ public class FaceDetector {
     
         return opts;
     }
- }
     
     public void close() {
         if (session != null) {
