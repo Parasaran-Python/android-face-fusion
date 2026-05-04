@@ -39,13 +39,13 @@ public class FaceEmbedder {
     
             // however you currently obtain the model file...
             ModelDownloader downloader = new ModelDownloader(context);
-            File modelFile = downloader.getModelFile("w600k_r50.onnx"); // ArcFace model [1](https://www.sidefx.com/docs/hdk/nnapi__provider__factory_8h.html)
+            File modelFile = downloader.getModelFile("w600k_r50.onnx");
     
             env = OrtEnvironment.getEnvironment();
     
             // NNAPI session options (same as FaceDetector)
             SessionOptions opts = createNnapiSessionOptions();
-            session = env.createSession(modelFile.getAbsolutePath(), opts); [2](https://www.javathinking.com/blog/what-does-a-cannot-find-symbol-or-cannot-resolve-symbol-error-mean/)
+            session = env.createSession(modelFile.getAbsolutePath(), opts);
     
             Log.i(TAG, "ArcFace session created with NNAPI options");
         } catch (Exception e) {
