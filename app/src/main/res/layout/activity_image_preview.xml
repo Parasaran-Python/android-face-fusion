@@ -19,6 +19,6 @@
         android:background="@android:color/transparent"
         android:src="@android:drawable/ic_menu_close_clear_cancel"
         android:contentDescription="Close preview"
-        android:tint="#FFFFFF" />
+        app:tint="#FFFFFF" />
 
 </FrameLayout>
