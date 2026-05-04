@@ -50,19 +50,27 @@ public class FaceDetector {
 
     public void initialize() throws Exception {
         try {
-            // Download model if needed and load from file path directly
             Log.d(TAG, "Loading face detection model...");
             ModelDownloader downloader = new ModelDownloader(context);
             File modelFile = downloader.getModelFile("det_10g.onnx");
-            
-            Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
-            
-            // Load directly from file path to avoid OOM with large files
-            session = env.createSession(modelFile.getAbsolutePath());
-            Log.d(TAG, "Face detection model initialized successfully");
+    
+            // 1. Create ORT environment
+            env = OrtEnvironment.getEnvironment();
+    
+            // 2. Use NNAPI-enabled SessionOptions (your helper method)
+            SessionOptions opts = createNnapiSessionOptions();
+    
+            Log.i(TAG, "Creating SCRFD session with NNAPI");
+    
+            // 3. Create the ONNX Runtime session
+            session = env.createSession(modelFile.getAbsolutePath(), opts);
+    
+            // 4. Log which execution providers are actually in use
+            Log.i(TAG, "SCRFD session providers: " + session.getProviders());
+    
         } catch (Exception e) {
-            Log.e(TAG, "Error loading face detection model", e);
-            throw new Exception("Failed to load face detection model: " + e.getMessage());
+            Log.e(TAG, "Failed to initialize FaceDetector", e);
+            throw e;
         }
     }
 
