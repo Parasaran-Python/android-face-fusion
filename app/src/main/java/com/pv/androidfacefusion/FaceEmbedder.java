@@ -12,6 +12,10 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 
+import ai.onnxruntime.OrtSession.SessionOptions;
+import ai.onnxruntime.providers.NNAPIFlags;
+
+
 /**
  * Face embedder to extract face features using ONNX model
  */
