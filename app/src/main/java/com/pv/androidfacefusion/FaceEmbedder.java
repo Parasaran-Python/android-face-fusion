@@ -32,23 +32,27 @@ public class FaceEmbedder {
         this.context = context;
         this.env = OrtEnvironment.getEnvironment();
     }
-
+    
     public void initialize() throws Exception {
         try {
+            Log.d(TAG, "Loading ArcFace embedding model...");
+    
             // however you currently obtain the model file...
-            File modelFile = downloader.getModelFile("w600k_r50.onnx");
+            ModelDownloader downloader = new ModelDownloader(context);
+            File modelFile = downloader.getModelFile("w600k_r50.onnx"); // ArcFace model [1](https://www.sidefx.com/docs/hdk/nnapi__provider__factory_8h.html)
     
             env = OrtEnvironment.getEnvironment();
     
+            // NNAPI session options (same as FaceDetector)
             SessionOptions opts = createNnapiSessionOptions();
-            session = env.createSession(modelFile.getAbsolutePath(), opts);
+            session = env.createSession(modelFile.getAbsolutePath(), opts); [2](https://www.javathinking.com/blog/what-does-a-cannot-find-symbol-or-cannot-resolve-symbol-error-mean/)
     
             Log.i(TAG, "ArcFace session created with NNAPI options");
         } catch (Exception e) {
             Log.e(TAG, "Failed to initialize FaceEmbedder", e);
             throw e;
         }
-    } 
+    }
 
     public float[] getEmbedding(Bitmap faceBitmap) throws OrtException {
         if (session == null) {
