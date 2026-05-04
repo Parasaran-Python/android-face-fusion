@@ -1,53 +1,67 @@
-name: Android Release Build
+name: Android CI
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+    # 1. Checkout source
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: gradle
+    # 2. Install system dependencies
+    - name: Install system dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          build-essential \
+          git \
+          curl \
+          wget \
+          unzip \
+          zip \
+          cmake \
+          ninja-build \
+          libgl1-mesa-dev \
+          zlib1g-dev
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+    # 3. Set up JDK 17
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
 
-      - name: Extract versionName from Gradle
-        id: version
-        run: |
-          VERSION=$(grep -R "versionName" app/build.gradle* | head -n1 | sed 's/.*versionName[^"]*"\([^"]*\)".*/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Detected version: $VERSION"
+    # 4. Set up Android SDK
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
 
-      - name: Validate tag matches version
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$TAG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
-            echo "❌ Tag version ($TAG_VERSION) does not match versionName (${{ steps.version.outputs.version }})"
-            exit 1
-          fi
+    # 5. Accept Android SDK licenses
+    - name: Accept Android SDK licenses
+      run: yes | sdkmanager --licenses
 
-      - name: Build Release APK
-        run: ./gradlew assembleRelease
+    # 6. Make Gradle wrapper executable
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
 
-      - name: Create GitHub Release and upload APK
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Release v${{ steps.version.outputs.version }}
-          body: |
-            Android release version **${{ steps.version.outputs.version }}**
-          files: app/build/outputs/apk/release/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # 7. Build (Debug by default)
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    # (Optional) Build Release APK
+    # - name: Build Release APK
+    #   run: ./gradlew assembleRelease
+
+    # 8. Upload APK artifact
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-face-fusion-apk
+        path: app/build/outputs/apk/**/**/*.apk
