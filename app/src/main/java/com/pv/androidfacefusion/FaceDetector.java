@@ -9,12 +9,12 @@ import java.io.File;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.EnumSet;
 
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
-
 import ai.onnxruntime.OrtSession.SessionOptions;
 import ai.onnxruntime.providers.NNAPIFlags;
 
