@@ -42,6 +42,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import android.widget.HorizontalScrollView;
+import com.google.android.material.chip.Chip;
+import com.google.android.material.chip.ChipGroup;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,7 +54,13 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_PERMISSIONS = 100;
 
-    private ImageView sourceImageView, targetImageView, resultImageView;
+    private ImageView sourceImageView, resultImageView;
+    private FaceOverlayImageView targetImageView;
+    private HorizontalScrollView targetFaceChipScrollView;
+    private ChipGroup targetFaceChipGroup;
+    private TextView targetFaceStatusText;
+    private List<FaceDetector.Face> targetFacesList = new ArrayList<>();
+
     private MaterialButton btnSelectSourceLocal, btnSelectSourceUrl;
     private MaterialButton btnSelectTargetLocal, btnSelectTargetUrl;
     private MaterialButton btnProcess, btnSaveResult, btnShareResult, btnReset;
@@ -97,6 +108,10 @@ public class MainActivity extends AppCompatActivity {
         sourceImageView = findViewById(R.id.sourceImageView);
         targetImageView = findViewById(R.id.targetImageView);
         resultImageView = findViewById(R.id.resultImageView);
+
+        targetFaceChipScrollView = findViewById(R.id.targetFaceChipScrollView);
+        targetFaceChipGroup = findViewById(R.id.targetFaceChipGroup);
+        targetFaceStatusText = findViewById(R.id.targetFaceStatusText);
 
         btnSelectSourceLocal = findViewById(R.id.btnSelectSourceLocal);
         btnSelectSourceUrl = findViewById(R.id.btnSelectSourceUrl);
@@ -232,6 +247,9 @@ public class MainActivity extends AppCompatActivity {
                     hideOverlay();
                     btnProcess.setEnabled(true);
                     Toast.makeText(this, "All models loaded!", Toast.LENGTH_SHORT).show();
+                    if (targetBitmap != null) {
+                        detectTargetFacesAsync(targetBitmap);
+                    }
                 });
             } catch (Exception e) {
                 e.printStackTrace();
@@ -287,8 +305,10 @@ public class MainActivity extends AppCompatActivity {
 
         // Image preview on tap
         sourceImageView.setOnClickListener(v -> openImagePreview(sourceBitmap));
-        targetImageView.setOnClickListener(v -> openImagePreview(targetBitmap));
         resultImageView.setOnClickListener(v -> openImagePreview(resultBitmap));
+
+        // Sync canvas tap with face selection chip
+        targetImageView.setOnFaceSelectedListener(this::selectChipForFaceIndex);
     }
 
     private void openImagePreview(Bitmap bitmap) {
@@ -304,6 +324,13 @@ public class MainActivity extends AppCompatActivity {
 
         sourceImageView.setImageDrawable(null);
         targetImageView.setImageDrawable(null);
+        targetImageView.setFaces(null);
+        targetFacesList.clear();
+
+        targetFaceChipGroup.removeAllViews();
+        targetFaceStatusText.setVisibility(View.GONE);
+        targetFaceChipScrollView.setVisibility(View.GONE);
+
         resultImageView.setImageDrawable(null);
         resultCard.setVisibility(View.GONE);
     }
@@ -370,6 +397,7 @@ public class MainActivity extends AppCompatActivity {
                     } else {
                         targetBitmap = finalBitmap;
                         targetImageView.setImageBitmap(finalBitmap);
+                        detectTargetFacesAsync(finalBitmap);
                     }
                 });
             } catch (IOException e) {
@@ -417,6 +445,7 @@ public class MainActivity extends AppCompatActivity {
                     } else {
                         targetBitmap = finalBitmap;
                         targetImageView.setImageBitmap(finalBitmap);
+                        detectTargetFacesAsync(finalBitmap);
                     }
                 });
             } catch (Exception e) {
@@ -427,6 +456,93 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void detectTargetFacesAsync(Bitmap bitmap) {
+        if (faceDetector == null || bitmap == null) return;
+        executorService.execute(() -> {
+            try {
+                List<FaceDetector.Face> faces = faceDetector.detectFaces(bitmap);
+                runOnUiThread(() -> updateTargetFaceSelectionUI(faces));
+            } catch (Exception e) {
+                Log.e("MainActivity", "Error detecting target faces", e);
+                runOnUiThread(() -> {
+                    if (targetFaceStatusText != null) targetFaceStatusText.setVisibility(View.GONE);
+                    if (targetFaceChipScrollView != null) targetFaceChipScrollView.setVisibility(View.GONE);
+                });
+            }
+        });
+    }
+
+    private void updateTargetFaceSelectionUI(List<FaceDetector.Face> faces) {
+        targetFacesList = (faces != null) ? faces : new ArrayList<>();
+        targetImageView.setFaces(targetFacesList);
+
+        targetFaceChipGroup.removeAllViews();
+
+        if (targetFacesList.isEmpty()) {
+            targetFaceStatusText.setText("No face detected in target image");
+            targetFaceStatusText.setVisibility(View.VISIBLE);
+            targetFaceChipScrollView.setVisibility(View.GONE);
+            return;
+        }
+
+        targetFaceStatusText.setVisibility(View.VISIBLE);
+
+        if (targetFacesList.size() == 1) {
+            targetFaceStatusText.setText("1 face detected in target image:");
+            targetFaceChipScrollView.setVisibility(View.VISIBLE);
+
+            Chip chip = createFaceChip("👤 Face 1", 0);
+            chip.setChecked(true);
+            targetFaceChipGroup.addView(chip);
+        } else {
+            targetFaceStatusText.setText(targetFacesList.size() + " faces detected. Tap a face on image or select below:");
+            targetFaceChipScrollView.setVisibility(View.VISIBLE);
+
+            // Add "All Faces" chip (index -1)
+            Chip allChip = createFaceChip("✨ All Faces (" + targetFacesList.size() + ")", -1);
+            allChip.setChecked(true);
+            targetFaceChipGroup.addView(allChip);
+
+            // Add individual face chips
+            for (int i = 0; i < targetFacesList.size(); i++) {
+                Chip chip = createFaceChip("👤 Face " + (i + 1), i);
+                targetFaceChipGroup.addView(chip);
+            }
+        }
+
+        targetFaceChipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            if (!checkedIds.isEmpty()) {
+                View checkedView = group.findViewById(checkedIds.get(0));
+                if (checkedView != null && checkedView.getTag() instanceof Integer) {
+                    int selectedIndex = (Integer) checkedView.getTag();
+                    targetImageView.setSelectedFaceIndex(selectedIndex);
+                }
+            }
+        });
+    }
+
+    private Chip createFaceChip(String label, int index) {
+        Chip chip = new Chip(this);
+        chip.setText(label);
+        chip.setCheckable(true);
+        chip.setClickable(true);
+        chip.setTag(index);
+        chip.setId(View.generateViewId());
+        return chip;
+    }
+
+    private void selectChipForFaceIndex(int index) {
+        for (int i = 0; i < targetFaceChipGroup.getChildCount(); i++) {
+            View child = targetFaceChipGroup.getChildAt(i);
+            if (child instanceof Chip && child.getTag() instanceof Integer) {
+                if ((Integer) child.getTag() == index) {
+                    ((Chip) child).setChecked(true);
+                    break;
+                }
+            }
+        }
     }
 
     private void processFaceFusion() {
@@ -442,14 +558,16 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        final int targetFaceIndex = targetImageView.getSelectedFaceIndex();
+
         btnProcess.setEnabled(false);
         resultCard.setVisibility(View.GONE);
-        showOverlay("Swapping Faces", "Detecting faces...");
+        showOverlay("Swapping Faces", "Processing face swap...");
 
         executorService.execute(() -> {
             try {
                 runOnUiThread(() -> updateOverlay("Processing face swap...", -1));
-                Bitmap result = processor.processFaceFusion(sourceBitmap, targetBitmap);
+                Bitmap result = processor.processFaceFusion(sourceBitmap, targetBitmap, targetFaceIndex);
                 resultBitmap = result;
 
                 runOnUiThread(() -> {
