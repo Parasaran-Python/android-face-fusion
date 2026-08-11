@@ -476,6 +476,8 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private boolean isSyncingChips = false;
+
     private void updateTargetFaceSelectionUI(List<FaceDetector.Face> faces) {
         targetFacesList = (faces != null) ? faces : new ArrayList<>();
         targetImageView.setFaces(targetFacesList);
@@ -503,7 +505,7 @@ public class MainActivity extends AppCompatActivity {
             targetFaceStatusText.setText(targetFacesList.size() + " faces detected. Tap faces on image or chips below to toggle:");
             targetFaceChipScrollView.setVisibility(View.VISIBLE);
 
-            // Add "Select All" chip (index -1)
+            // Add "Select All" master chip (index -1)
             Chip allChip = createFaceChip("✨ Select All (" + targetFacesList.size() + ")", -1);
             allChip.setChecked(true);
             targetFaceChipGroup.addView(allChip);
@@ -516,29 +518,29 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        targetFaceChipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            Set<Integer> newSelection = new HashSet<>();
-            boolean isSelectAllChecked = false;
-            for (int id : checkedIds) {
-                View view = group.findViewById(id);
-                if (view != null && view.getTag() instanceof Integer) {
-                    int index = (Integer) view.getTag();
+        // Attach click listeners for 2-way master toggle and individual chip sync
+        for (int i = 0; i < targetFaceChipGroup.getChildCount(); i++) {
+            View child = targetFaceChipGroup.getChildAt(i);
+            if (child instanceof Chip && child.getTag() instanceof Integer) {
+                Chip chip = (Chip) child;
+                int index = (Integer) chip.getTag();
+                chip.setOnClickListener(v -> {
+                    if (isSyncingChips) return;
                     if (index == -1) {
-                        isSelectAllChecked = true;
+                        // Master toggle: if Select All is checked -> select all faces; if unchecked -> clear selection
+                        if (chip.isChecked()) {
+                            targetImageView.setSelectedFaceIndex(-1);
+                        } else {
+                            targetImageView.setSelectedFaceIndices(new HashSet<>());
+                        }
                     } else {
-                        newSelection.add(index);
+                        // Individual face toggle
+                        targetImageView.toggleFaceIndex(index);
                     }
-                }
+                    syncChipsWithOverlay();
+                });
             }
-
-            if (isSelectAllChecked && newSelection.size() < targetFacesList.size()) {
-                for (int i = 0; i < targetFacesList.size(); i++) {
-                    newSelection.add(i);
-                }
-            }
-
-            targetImageView.setSelectedFaceIndices(newSelection);
-        });
+        }
     }
 
     private Chip createFaceChip(String label, int index) {
@@ -556,18 +558,26 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void syncChipsWithOverlay() {
+        if (targetFaceChipGroup == null || targetFacesList == null) return;
+        isSyncingChips = true;
         Set<Integer> selected = targetImageView.getSelectedFaceIndices();
+        boolean allSelected = (selected.size() == targetFacesList.size() && !targetFacesList.isEmpty());
+
         for (int i = 0; i < targetFaceChipGroup.getChildCount(); i++) {
             View child = targetFaceChipGroup.getChildAt(i);
             if (child instanceof Chip && child.getTag() instanceof Integer) {
-                int tag = (Integer) child.getTag();
+                Chip chip = (Chip) child;
+                int tag = (Integer) chip.getTag();
                 if (tag == -1) {
-                    ((Chip) child).setChecked(selected.size() == targetFacesList.size() && !targetFacesList.isEmpty());
+                    // Auto-select "Select All" when all individual faces are selected
+                    chip.setChecked(allSelected);
                 } else {
-                    ((Chip) child).setChecked(selected.contains(tag));
+                    // Auto-select individual chip if face is in selected set
+                    chip.setChecked(selected.contains(tag));
                 }
             }
         }
+        isSyncingChips = false;
     }
 
     private void processFaceFusion() {
