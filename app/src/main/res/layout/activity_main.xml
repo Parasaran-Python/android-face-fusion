@@ -145,14 +145,42 @@
                         android:textStyle="bold"
                         android:layout_marginBottom="8dp" />
 
-                    <ImageView
+                    <com.pv.androidfacefusion.FaceOverlayImageView
                         android:id="@+id/targetImageView"
                         android:layout_width="match_parent"
-                        android:layout_height="200dp"
-                        android:scaleType="centerCrop"
+                        android:layout_height="220dp"
+                        android:scaleType="fitCenter"
                         android:background="?attr/colorSurfaceVariant"
                         android:contentDescription="Target image"
                         android:layout_marginBottom="8dp" />
+
+                    <TextView
+                        android:id="@+id/targetFaceStatusText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textSize="13sp"
+                        android:textColor="?attr/colorPrimary"
+                        android:visibility="gone"
+                        android:layout_marginBottom="4dp"
+                        tools:text="3 faces detected. Tap a face or select below:" />
+
+                    <HorizontalScrollView
+                        android:id="@+id/targetFaceChipScrollView"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:scrollbars="none"
+                        android:visibility="gone"
+                        android:layout_marginBottom="8dp">
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/targetFaceChipGroup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:singleLine="true"
+                            app:singleSelection="true"
+                            app:selectionRequired="true" />
+
+                    </HorizontalScrollView>
 
                     <LinearLayout
                         android:layout_width="match_parent"
