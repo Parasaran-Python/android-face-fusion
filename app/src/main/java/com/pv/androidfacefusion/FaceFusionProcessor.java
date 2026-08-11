@@ -71,7 +71,11 @@ public class FaceFusionProcessor {
             Bitmap alignedTargetFace = ImageUtils.alignFace(result, targetFace.landmarks, 128);
             Bitmap swappedFace = faceSwapper.swapFace(alignedTargetFace, sourceEmbedding, result);
 
-            result = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
+            Bitmap blended = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
+            if (result != targetImage) {
+                result.recycle();
+            }
+            result = blended;
 
             alignedTargetFace.recycle();
             swappedFace.recycle();
@@ -199,8 +203,12 @@ public class FaceFusionProcessor {
             Bitmap swappedFace = faceSwapper.swapFace(alignedTargetFace, sourceEmbedding, result);
             
             // Blend back with inverse transformation
-            result = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
-            
+            Bitmap blended = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
+            if (result != targetImage) {
+                result.recycle();
+            }
+            result = blended;
+
             alignedTargetFace.recycle();
             swappedFace.recycle();
         }
