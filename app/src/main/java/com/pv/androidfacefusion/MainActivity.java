@@ -46,7 +46,9 @@ import android.widget.HorizontalScrollView;
 import com.google.android.material.chip.Chip;
 import com.google.android.material.chip.ChipGroup;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -307,8 +309,8 @@ public class MainActivity extends AppCompatActivity {
         sourceImageView.setOnClickListener(v -> openImagePreview(sourceBitmap));
         resultImageView.setOnClickListener(v -> openImagePreview(resultBitmap));
 
-        // Sync canvas tap with face selection chip
-        targetImageView.setOnFaceSelectedListener(this::selectChipForFaceIndex);
+        // Sync canvas tap with face selection chips
+        targetImageView.setOnFaceSelectedListener(selectedIndices -> syncChipsWithOverlay());
     }
 
     private void openImagePreview(Bitmap bitmap) {
@@ -479,6 +481,7 @@ public class MainActivity extends AppCompatActivity {
         targetImageView.setFaces(targetFacesList);
 
         targetFaceChipGroup.removeAllViews();
+        targetFaceChipGroup.setOnCheckedStateChangeListener(null);
 
         if (targetFacesList.isEmpty()) {
             targetFaceStatusText.setText("No face detected in target image");
@@ -497,29 +500,44 @@ public class MainActivity extends AppCompatActivity {
             chip.setChecked(true);
             targetFaceChipGroup.addView(chip);
         } else {
-            targetFaceStatusText.setText(targetFacesList.size() + " faces detected. Tap a face on image or select below:");
+            targetFaceStatusText.setText(targetFacesList.size() + " faces detected. Tap faces on image or chips below to toggle:");
             targetFaceChipScrollView.setVisibility(View.VISIBLE);
 
-            // Add "All Faces" chip (index -1)
-            Chip allChip = createFaceChip("✨ All Faces (" + targetFacesList.size() + ")", -1);
+            // Add "Select All" chip (index -1)
+            Chip allChip = createFaceChip("✨ Select All (" + targetFacesList.size() + ")", -1);
             allChip.setChecked(true);
             targetFaceChipGroup.addView(allChip);
 
             // Add individual face chips
             for (int i = 0; i < targetFacesList.size(); i++) {
                 Chip chip = createFaceChip("👤 Face " + (i + 1), i);
+                chip.setChecked(true);
                 targetFaceChipGroup.addView(chip);
             }
         }
 
         targetFaceChipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (!checkedIds.isEmpty()) {
-                View checkedView = group.findViewById(checkedIds.get(0));
-                if (checkedView != null && checkedView.getTag() instanceof Integer) {
-                    int selectedIndex = (Integer) checkedView.getTag();
-                    targetImageView.setSelectedFaceIndex(selectedIndex);
+            Set<Integer> newSelection = new HashSet<>();
+            boolean isSelectAllChecked = false;
+            for (int id : checkedIds) {
+                View view = group.findViewById(id);
+                if (view != null && view.getTag() instanceof Integer) {
+                    int index = (Integer) view.getTag();
+                    if (index == -1) {
+                        isSelectAllChecked = true;
+                    } else {
+                        newSelection.add(index);
+                    }
                 }
             }
+
+            if (isSelectAllChecked && newSelection.size() < targetFacesList.size()) {
+                for (int i = 0; i < targetFacesList.size(); i++) {
+                    newSelection.add(i);
+                }
+            }
+
+            targetImageView.setSelectedFaceIndices(newSelection);
         });
     }
 
@@ -534,12 +552,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void selectChipForFaceIndex(int index) {
+        syncChipsWithOverlay();
+    }
+
+    private void syncChipsWithOverlay() {
+        Set<Integer> selected = targetImageView.getSelectedFaceIndices();
         for (int i = 0; i < targetFaceChipGroup.getChildCount(); i++) {
             View child = targetFaceChipGroup.getChildAt(i);
             if (child instanceof Chip && child.getTag() instanceof Integer) {
-                if ((Integer) child.getTag() == index) {
-                    ((Chip) child).setChecked(true);
-                    break;
+                int tag = (Integer) child.getTag();
+                if (tag == -1) {
+                    ((Chip) child).setChecked(selected.size() == targetFacesList.size() && !targetFacesList.isEmpty());
+                } else {
+                    ((Chip) child).setChecked(selected.contains(tag));
                 }
             }
         }
@@ -558,7 +583,12 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        final int targetFaceIndex = targetImageView.getSelectedFaceIndex();
+        final Set<Integer> selectedFaceIndices = targetImageView.getSelectedFaceIndices();
+        if (selectedFaceIndices == null || selectedFaceIndices.isEmpty()) {
+            Toast.makeText(this, "Please select at least one target face to swap",
+                Toast.LENGTH_SHORT).show();
+            return;
+        }
 
         btnProcess.setEnabled(false);
         resultCard.setVisibility(View.GONE);
@@ -567,7 +597,7 @@ public class MainActivity extends AppCompatActivity {
         executorService.execute(() -> {
             try {
                 runOnUiThread(() -> updateOverlay("Processing face swap...", -1));
-                Bitmap result = processor.processFaceFusion(sourceBitmap, targetBitmap, targetFaceIndex);
+                Bitmap result = processor.processFaceFusion(sourceBitmap, targetBitmap, selectedFaceIndices);
                 resultBitmap = result;
 
                 runOnUiThread(() -> {

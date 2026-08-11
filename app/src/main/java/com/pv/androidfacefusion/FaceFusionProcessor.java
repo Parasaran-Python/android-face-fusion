@@ -5,6 +5,7 @@ import android.graphics.RectF;
 import android.util.Log;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Main face fusion processor that coordinates face detection, embedding, and swapping
@@ -28,6 +29,57 @@ public class FaceFusionProcessor {
      */
     public Bitmap processFaceFusion(Bitmap sourceImage, Bitmap targetImage) throws Exception {
         return processFaceFusion(sourceImage, targetImage, 0);
+    }
+
+    /**
+     * Process face fusion for selected target face indices (multi-selection)
+     */
+    public Bitmap processFaceFusion(Bitmap sourceImage, Bitmap targetImage, Set<Integer> selectedFaceIndices) throws Exception {
+        if (selectedFaceIndices == null || selectedFaceIndices.isEmpty()) {
+            return processFaceFusionMultiple(sourceImage, targetImage);
+        }
+
+        Log.d(TAG, "Starting face fusion process for " + selectedFaceIndices.size() + " selected face(s)...");
+
+        // Detect source face
+        List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
+        if (sourceFaces.isEmpty()) {
+            throw new Exception("No face detected in source image. Please use an image with a clear, frontal face.");
+        }
+        FaceDetector.Face sourceFace = sourceFaces.get(0);
+
+        // Align source face and extract embedding
+        Bitmap alignedSourceFace = ImageUtils.alignFace(sourceImage, sourceFace.landmarks, 112);
+        float[] sourceEmbedding = faceEmbedder.getEmbedding(alignedSourceFace);
+
+        // Detect target faces
+        List<FaceDetector.Face> targetFaces = faceDetector.detectFaces(targetImage);
+        if (targetFaces.isEmpty()) {
+            throw new Exception("No face detected in target image.");
+        }
+
+        Bitmap result = targetImage.copy(Bitmap.Config.ARGB_8888, true);
+
+        for (int i = 0; i < targetFaces.size(); i++) {
+            if (!selectedFaceIndices.contains(i)) {
+                continue; // Skip faces that are not selected by user
+            }
+
+            Log.d(TAG, "Processing selected target face index: " + i);
+            FaceDetector.Face targetFace = targetFaces.get(i);
+
+            Bitmap alignedTargetFace = ImageUtils.alignFace(result, targetFace.landmarks, 128);
+            Bitmap swappedFace = faceSwapper.swapFace(alignedTargetFace, sourceEmbedding, result);
+
+            result = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
+
+            alignedTargetFace.recycle();
+            swappedFace.recycle();
+        }
+
+        alignedSourceFace.recycle();
+        Log.d(TAG, "Multi-select face fusion completed!");
+        return result;
     }
 
     /**

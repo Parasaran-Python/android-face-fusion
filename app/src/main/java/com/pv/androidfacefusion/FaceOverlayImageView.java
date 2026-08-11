@@ -13,19 +13,21 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatImageView;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Interactive ImageView that highlights detected faces and allows user to tap to select a face.
+ * Interactive ImageView that highlights detected faces and allows user to tap to select face(s).
  */
 public class FaceOverlayImageView extends AppCompatImageView {
 
     public interface OnFaceSelectedListener {
-        void onFaceSelected(int index);
+        void onFaceSelectionChanged(Set<Integer> selectedIndices);
     }
 
     private List<FaceDetector.Face> faces = new ArrayList<>();
-    private int selectedFaceIndex = -1; // -1 means "All Faces", 0..N-1 means specific face
+    private Set<Integer> selectedFaceIndices = new HashSet<>();
     private OnFaceSelectedListener listener;
 
     private Paint boxSelectedPaint;
@@ -88,18 +90,49 @@ public class FaceOverlayImageView extends AppCompatImageView {
 
     public void setFaces(List<FaceDetector.Face> detectedFaces) {
         this.faces = (detectedFaces != null) ? detectedFaces : new ArrayList<>();
-        // Default to All Faces (-1) if multiple faces, or Face 0 if single face
-        this.selectedFaceIndex = (this.faces.size() > 1) ? -1 : 0;
+        this.selectedFaceIndices.clear();
+        for (int i = 0; i < this.faces.size(); i++) {
+            this.selectedFaceIndices.add(i); // Default to selecting all faces
+        }
         invalidate();
     }
 
     public void setSelectedFaceIndex(int index) {
-        this.selectedFaceIndex = index;
+        this.selectedFaceIndices.clear();
+        if (index == -1) {
+            for (int i = 0; i < faces.size(); i++) {
+                this.selectedFaceIndices.add(i);
+            }
+        } else if (index >= 0 && index < faces.size()) {
+            this.selectedFaceIndices.add(index);
+        }
         invalidate();
     }
 
+    public void toggleFaceIndex(int index) {
+        if (index >= 0 && index < faces.size()) {
+            if (selectedFaceIndices.contains(index)) {
+                selectedFaceIndices.remove(index);
+            } else {
+                selectedFaceIndices.add(index);
+            }
+            invalidate();
+        }
+    }
+
+    public void setSelectedFaceIndices(Set<Integer> indices) {
+        this.selectedFaceIndices = (indices != null) ? new HashSet<>(indices) : new HashSet<>();
+        invalidate();
+    }
+
+    public Set<Integer> getSelectedFaceIndices() {
+        return selectedFaceIndices;
+    }
+
     public int getSelectedFaceIndex() {
-        return selectedFaceIndex;
+        if (selectedFaceIndices.size() == faces.size()) return -1; // All selected
+        if (selectedFaceIndices.size() == 1) return selectedFaceIndices.iterator().next();
+        return -1;
     }
 
     public List<FaceDetector.Face> getFaces() {
@@ -125,7 +158,7 @@ public class FaceOverlayImageView extends AppCompatImageView {
             FaceDetector.Face face = faces.get(i);
             matrix.mapRect(mappedBox, face.bbox);
 
-            boolean isSelected = (selectedFaceIndex == -1 || selectedFaceIndex == i);
+            boolean isSelected = selectedFaceIndices.contains(i);
 
             Paint boxPaint = isSelected ? boxSelectedPaint : boxUnselectedPaint;
             Paint badgeBgPaint = isSelected ? badgeBgSelectedPaint : badgeBgUnselectedPaint;
@@ -148,7 +181,7 @@ public class FaceOverlayImageView extends AppCompatImageView {
             canvas.drawRoundRect(badgeRect, 4.0f * density, 4.0f * density, badgeBgPaint);
 
             // Set badge text color (dark gray for cyan selected badge, white for unselected)
-            if (isSelected && selectedFaceIndex != -1) {
+            if (isSelected) {
                 badgeTextPaint.setColor(0xFF000000);
             } else {
                 badgeTextPaint.setColor(0xFFFFFFFF);
@@ -201,10 +234,9 @@ public class FaceOverlayImageView extends AppCompatImageView {
 
             for (int i = 0; i < faces.size(); i++) {
                 if (faces.get(i).bbox.contains(bmpX, bmpY)) {
-                    selectedFaceIndex = i;
-                    invalidate();
+                    toggleFaceIndex(i);
                     if (listener != null) {
-                        listener.onFaceSelected(i);
+                        listener.onFaceSelectionChanged(selectedFaceIndices);
                     }
                     return;
                 }
