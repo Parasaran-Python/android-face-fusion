@@ -30,6 +30,7 @@ public class TargetFaceMappingAdapter extends RecyclerView.Adapter<TargetFaceMap
     private final List<FaceDetector.Face> targetFaces = new ArrayList<>();
     private final List<SavedFace> savedFaces = new ArrayList<>();
     private final Map<Integer, SavedFace> selectedMapping = new HashMap<>();
+    private final Map<Integer, Bitmap> cropCache = new HashMap<>();
 
     public TargetFaceMappingAdapter(Context context) {
         this.context = context;
@@ -46,7 +47,25 @@ public class TargetFaceMappingAdapter extends RecyclerView.Adapter<TargetFaceMap
             this.savedFaces.addAll(savedFaces);
         }
         this.selectedMapping.clear();
+        clearCropCache();
         notifyDataSetChanged();
+    }
+
+    public void updateSavedFaces(List<SavedFace> newSavedFaces) {
+        this.savedFaces.clear();
+        if (newSavedFaces != null) {
+            this.savedFaces.addAll(newSavedFaces);
+        }
+        notifyDataSetChanged();
+    }
+
+    private void clearCropCache() {
+        for (Bitmap bmp : cropCache.values()) {
+            if (bmp != null && !bmp.isRecycled()) {
+                bmp.recycle();
+            }
+        }
+        cropCache.clear();
     }
 
     public Map<Integer, SavedFace> getSelectedMapping() {
@@ -65,15 +84,23 @@ public class TargetFaceMappingAdapter extends RecyclerView.Adapter<TargetFaceMap
         FaceDetector.Face face = targetFaces.get(position);
         holder.label.setText("Target Face " + (position + 1));
 
-        // Crop face from target bitmap for preview thumbnail
-        if (targetBitmap != null && face.bbox != null) {
-            Bitmap crop = cropFaceThumbnail(targetBitmap, face.bbox);
+        // Use cached crop or compute new crop thumbnail
+        Bitmap crop = cropCache.get(position);
+        if (crop == null && targetBitmap != null && face.bbox != null) {
+            crop = cropFaceThumbnail(targetBitmap, face.bbox);
             if (crop != null) {
-                holder.cropImageView.setImageBitmap(crop);
-            } else {
-                holder.cropImageView.setImageResource(android.R.drawable.ic_menu_camera);
+                cropCache.put(position, crop);
             }
         }
+
+        if (crop != null) {
+            holder.cropImageView.setImageBitmap(crop);
+        } else {
+            holder.cropImageView.setImageResource(android.R.drawable.ic_menu_camera);
+        }
+
+        // Detach old listener to prevent unwanted triggers during binding
+        holder.spinner.setOnItemSelectedListener(null);
 
         // Prepare spinner dropdown options
         List<String> options = new ArrayList<>();
@@ -92,16 +119,16 @@ public class TargetFaceMappingAdapter extends RecyclerView.Adapter<TargetFaceMap
 
         // Pre-select if previously selected
         SavedFace currentlySelected = selectedMapping.get(position);
+        int defaultSelection = 0;
         if (currentlySelected != null) {
-            int indexInSaved = savedFaces.indexOf(currentlySelected);
-            if (indexInSaved >= 0) {
-                holder.spinner.setSelection(indexInSaved + 1);
-            } else {
-                holder.spinner.setSelection(0);
+            for (int i = 0; i < savedFaces.size(); i++) {
+                if (savedFaces.get(i).getId().equals(currentlySelected.getId())) {
+                    defaultSelection = i + 1;
+                    break;
+                }
             }
-        } else {
-            holder.spinner.setSelection(0);
         }
+        holder.spinner.setSelection(defaultSelection);
 
         int pos = position;
         holder.spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {

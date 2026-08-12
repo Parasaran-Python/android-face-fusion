@@ -168,8 +168,17 @@ public class ModelDownloader {
         HttpURLConnection connection = openConnectionWithRedirects(urlString, existingLength);
         int responseCode = connection.getResponseCode();
         
+        if (responseCode == 416) { // Requested Range Not Satisfiable - invalid range or completed file
+            connection.disconnect();
+            if (outputFile.exists()) outputFile.delete();
+            existingLength = 0L;
+            connection = openConnectionWithRedirects(urlString, 0L);
+            responseCode = connection.getResponseCode();
+        }
+
         boolean isPartialContent = (responseCode == HttpURLConnection.HTTP_PARTIAL);
         if (responseCode != HttpURLConnection.HTTP_OK && !isPartialContent) {
+            connection.disconnect();
             throw new Exception("Server returned HTTP " + responseCode + " " + connection.getResponseMessage());
         }
         
@@ -188,17 +197,14 @@ public class ModelDownloader {
             byte[] data = new byte[32768]; // 32KB buffer
             int count;
             int lastProgress = -1;
+            long downloadedBytes = isPartialContent ? existingLength : 0L;
             
             while ((count = input.read(data)) != -1) {
                 output.write(data, 0, count);
-                if (isPartialContent) {
-                    existingLength += count;
-                } else {
-                    existingLength += count;
-                }
+                downloadedBytes += count;
                 
                 if (totalLength > 0 && callback != null) {
-                    int progress = (int) (existingLength * 100 / totalLength);
+                    int progress = (int) (downloadedBytes * 100 / totalLength);
                     if (progress != lastProgress && progress % 2 == 0) {
                         callback.onProgress(modelName, progress);
                         lastProgress = progress;
@@ -212,7 +218,7 @@ public class ModelDownloader {
                 callback.onComplete(modelName);
             }
             
-            Log.d(TAG, "Downloaded " + modelName + " successfully (" + existingLength + " bytes)");
+            Log.d(TAG, "Downloaded " + modelName + " successfully (" + downloadedBytes + " bytes)");
         } finally {
             if (output != null) {
                 try { output.close(); } catch (Exception ignored) {}

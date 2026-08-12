@@ -237,7 +237,7 @@ public class MainActivity extends AppCompatActivity implements SavedFacesAdapter
                 }
                 // Update mapping dropdowns if target image loaded
                 if (libraryTargetBitmap != null && !libraryTargetFacesList.isEmpty()) {
-                    targetMappingAdapter.setData(libraryTargetBitmap, libraryTargetFacesList, savedFaces);
+                    targetMappingAdapter.updateSavedFaces(savedFaces);
                 }
             });
         });
@@ -612,19 +612,14 @@ public class MainActivity extends AppCompatActivity implements SavedFacesAdapter
                     return;
                 }
 
-                FaceDetector.Face face = faces.get(0);
-
-                // Align face and extract embedding
-                Bitmap alignedFace = ImageUtils.alignFace(bitmap, face.landmarks, 112);
-                float[] embedding = faceEmbedder.getEmbedding(alignedFace);
-
-                // Crop face for thumbnail
-                Bitmap faceCrop = cropFaceCrop(bitmap, face.bbox);
-
-                runOnUiThread(() -> {
-                    hideOverlay();
-                    promptFaceNameAndSave(faceCrop, embedding);
-                });
+                if (faces.size() == 1) {
+                    extractAndPromptSaveFace(bitmap, faces.get(0));
+                } else {
+                    runOnUiThread(() -> {
+                        hideOverlay();
+                        showMultiFaceSelectionDialogForLibrary(bitmap, faces);
+                    });
+                }
             } catch (Exception e) {
                 e.printStackTrace();
                 runOnUiThread(() -> {
@@ -632,6 +627,47 @@ public class MainActivity extends AppCompatActivity implements SavedFacesAdapter
                     showError("Failed to process face: " + e.getMessage());
                 });
             }
+        });
+    }
+
+    private void showMultiFaceSelectionDialogForLibrary(Bitmap bitmap, List<FaceDetector.Face> faces) {
+        String[] items = new String[faces.size()];
+        for (int i = 0; i < faces.size(); i++) {
+            items[i] = "👤 Face " + (i + 1) + " (Confidence: " + Math.round(faces.get(i).score * 100) + "%)";
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Select Face to Save")
+            .setItems(items, (dialog, which) -> {
+                showOverlay("Adding Face to Library", "Extracting face features...");
+                executorService.execute(() -> {
+                    try {
+                        extractAndPromptSaveFace(bitmap, faces.get(which));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        runOnUiThread(() -> {
+                            hideOverlay();
+                            showError("Failed to extract face: " + e.getMessage());
+                        });
+                    }
+                });
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void extractAndPromptSaveFace(Bitmap bitmap, FaceDetector.Face face) throws Exception {
+        // Align face and extract embedding
+        Bitmap alignedFace = ImageUtils.alignFace(bitmap, face.landmarks, 112);
+        float[] embedding = faceEmbedder.getEmbedding(alignedFace);
+        alignedFace.recycle(); // Free aligned face memory immediately
+
+        // Crop face for thumbnail
+        Bitmap faceCrop = cropFaceCrop(bitmap, face.bbox);
+
+        runOnUiThread(() -> {
+            hideOverlay();
+            promptFaceNameAndSave(faceCrop, embedding);
         });
     }
 
