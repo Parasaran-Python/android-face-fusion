@@ -5,6 +5,7 @@ import android.graphics.RectF;
 import android.util.Log;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -83,6 +84,52 @@ public class FaceFusionProcessor {
 
         alignedSourceFace.recycle();
         Log.d(TAG, "Multi-select face fusion completed!");
+        return result;
+    }
+
+    /**
+     * Process face fusion where each target face index is mapped to a specific library face embedding
+     */
+    public Bitmap processFaceFusionWithMapping(Bitmap targetImage, Map<Integer, float[]> targetIndexToEmbeddingMap) throws Exception {
+        if (targetIndexToEmbeddingMap == null || targetIndexToEmbeddingMap.isEmpty()) {
+            throw new Exception("No target face mappings selected.");
+        }
+
+        Log.d(TAG, "Starting mapped face fusion for " + targetIndexToEmbeddingMap.size() + " target face mapping(s)...");
+
+        // Detect target faces
+        List<FaceDetector.Face> targetFaces = faceDetector.detectFaces(targetImage);
+        if (targetFaces.isEmpty()) {
+            throw new Exception("No face detected in target image.");
+        }
+
+        Bitmap result = targetImage.copy(Bitmap.Config.ARGB_8888, true);
+
+        for (int i = 0; i < targetFaces.size(); i++) {
+            if (!targetIndexToEmbeddingMap.containsKey(i)) {
+                continue; // Skip target faces that have no replacement selected
+            }
+
+            float[] sourceEmbedding = targetIndexToEmbeddingMap.get(i);
+            if (sourceEmbedding == null) continue;
+
+            Log.d(TAG, "Processing target face " + i + " with custom mapped face embedding");
+            FaceDetector.Face targetFace = targetFaces.get(i);
+
+            Bitmap alignedTargetFace = ImageUtils.alignFace(result, targetFace.landmarks, 128);
+            Bitmap swappedFace = faceSwapper.swapFace(alignedTargetFace, sourceEmbedding, result);
+
+            Bitmap blended = ImageUtils.blendFaces(result, swappedFace, targetFace.landmarks, 128);
+            if (result != targetImage) {
+                result.recycle();
+            }
+            result = blended;
+
+            alignedTargetFace.recycle();
+            swappedFace.recycle();
+        }
+
+        Log.d(TAG, "Mapped face fusion completed!");
         return result;
     }
 
