@@ -18,7 +18,16 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        }
+    }
+
+    ndkVersion = "28.2.13676358"
+
+    packaging {
+        jniLibs {
+            pickFirsts.add("**/libc++_shared.so")
+            useLegacyPackaging = false
         }
     }
 
