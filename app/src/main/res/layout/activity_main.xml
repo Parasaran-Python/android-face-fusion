@@ -26,7 +26,7 @@
                 app:layout_constraintTop_toTopOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintEnd_toEndOf="parent"
-                android:layout_marginBottom="16dp">
+                android:layout_marginBottom="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -46,7 +46,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Swap faces between two images using AI"
+                        android:text="Swap faces between images using AI"
                         android:textSize="14sp"
                         android:gravity="center"
                         android:layout_marginTop="4dp" />
@@ -55,188 +55,401 @@
 
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Source Image Section -->
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/sourceCard"
+            <!-- Mode Selector Switcher -->
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/modeToggleGroup"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="4dp"
+                app:singleSelection="true"
+                app:selectionRequired="true"
+                app:checkedButton="@id/btnModeStandard"
                 app:layout_constraintTop_toBottomOf="@id/titleCard"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintEnd_toEndOf="parent"
+                android:layout_marginTop="8dp"
                 android:layout_marginBottom="16dp">
 
-                <LinearLayout
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnModeStandard"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Standard Swap"
+                    app:icon="@android:drawable/ic_menu_rotate" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnModeLibrary"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Face Library"
+                    app:icon="@android:drawable/ic_menu_myplaces" />
+
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <!-- Mode 1: Standard Swap View Container -->
+            <LinearLayout
+                android:id="@+id/standardSwapContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="visible"
+                app:layout_constraintTop_toBottomOf="@id/modeToggleGroup"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <!-- Source Image Section -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/sourceCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Source Face (Face to extract)"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        android:layout_marginBottom="8dp" />
-
-                    <ImageView
-                        android:id="@+id/sourceImageView"
-                        android:layout_width="match_parent"
-                        android:layout_height="200dp"
-                        android:scaleType="centerCrop"
-                        android:background="?attr/colorSurfaceVariant"
-                        android:contentDescription="Source image"
-                        android:layout_marginBottom="8dp" />
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="4dp"
+                    android:layout_marginBottom="16dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center">
+                        android:orientation="vertical"
+                        android:padding="16dp">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSelectSourceLocal"
-                            android:layout_width="0dp"
+                        <TextView
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Local Image"
-                            android:layout_marginEnd="8dp"
-                            app:icon="@android:drawable/ic_menu_gallery" />
+                            android:text="Source Face (Face to extract)"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSelectSourceUrl"
-                            android:layout_width="0dp"
+                        <ImageView
+                            android:id="@+id/sourceImageView"
+                            android:layout_width="match_parent"
+                            android:layout_height="200dp"
+                            android:scaleType="centerCrop"
+                            android:background="?attr/colorSurfaceVariant"
+                            android:contentDescription="Source image"
+                            android:layout_marginBottom="8dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="From URL"
-                            app:icon="@android:drawable/ic_menu_upload" />
+                            android:orientation="horizontal"
+                            android:gravity="center">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectSourceLocal"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Local Image"
+                                android:layout_marginEnd="8dp"
+                                app:icon="@android:drawable/ic_menu_gallery" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectSourceUrl"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="From URL"
+                                app:icon="@android:drawable/ic_menu_upload" />
+
+                        </LinearLayout>
 
                     </LinearLayout>
 
-                </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
 
-            </com.google.android.material.card.MaterialCardView>
-
-            <!-- Target Image Section -->
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/targetCard"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="4dp"
-                app:layout_constraintTop_toBottomOf="@id/sourceCard"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                android:layout_marginBottom="16dp">
-
-                <LinearLayout
+                <!-- Target Image Section -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/targetCard"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Target Image (Face to replace)"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        android:layout_marginBottom="8dp" />
-
-                    <com.pv.androidfacefusion.FaceOverlayImageView
-                        android:id="@+id/targetImageView"
-                        android:layout_width="match_parent"
-                        android:layout_height="220dp"
-                        android:scaleType="fitCenter"
-                        android:background="?attr/colorSurfaceVariant"
-                        android:contentDescription="Target image"
-                        android:layout_marginBottom="8dp" />
-
-                    <TextView
-                        android:id="@+id/targetFaceStatusText"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textSize="13sp"
-                        android:textColor="?attr/colorPrimary"
-                        android:visibility="gone"
-                        android:layout_marginBottom="4dp"
-                        tools:text="3 faces detected. Tap a face or select below:" />
-
-                    <HorizontalScrollView
-                        android:id="@+id/targetFaceChipScrollView"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:scrollbars="none"
-                        android:visibility="gone"
-                        android:layout_marginBottom="8dp">
-
-                        <com.google.android.material.chip.ChipGroup
-                            android:id="@+id/targetFaceChipGroup"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            app:singleLine="true"
-                            app:singleSelection="false"
-                            app:selectionRequired="false" />
-
-                    </HorizontalScrollView>
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="4dp"
+                    android:layout_marginBottom="16dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center">
+                        android:orientation="vertical"
+                        android:padding="16dp">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSelectTargetLocal"
-                            android:layout_width="0dp"
+                        <TextView
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Local Image"
-                            android:layout_marginEnd="8dp"
-                            app:icon="@android:drawable/ic_menu_gallery" />
+                            android:text="Target Image (Face to replace)"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSelectTargetUrl"
-                            android:layout_width="0dp"
+                        <com.pv.androidfacefusion.FaceOverlayImageView
+                            android:id="@+id/targetImageView"
+                            android:layout_width="match_parent"
+                            android:layout_height="220dp"
+                            android:scaleType="fitCenter"
+                            android:background="?attr/colorSurfaceVariant"
+                            android:contentDescription="Target image"
+                            android:layout_marginBottom="8dp" />
+
+                        <TextView
+                            android:id="@+id/targetFaceStatusText"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="From URL"
-                            app:icon="@android:drawable/ic_menu_upload" />
+                            android:textSize="13sp"
+                            android:textColor="?attr/colorPrimary"
+                            android:visibility="gone"
+                            android:layout_marginBottom="4dp"
+                            tools:text="3 faces detected. Tap a face or select below:" />
+
+                        <HorizontalScrollView
+                            android:id="@+id/targetFaceChipScrollView"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:scrollbars="none"
+                            android:visibility="gone"
+                            android:layout_marginBottom="8dp">
+
+                            <com.google.android.material.chip.ChipGroup
+                                android:id="@+id/targetFaceChipGroup"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:singleLine="true"
+                                app:singleSelection="false"
+                                app:selectionRequired="false" />
+
+                        </HorizontalScrollView>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectTargetLocal"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Local Image"
+                                android:layout_marginEnd="8dp"
+                                app:icon="@android:drawable/ic_menu_gallery" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectTargetUrl"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="From URL"
+                                app:icon="@android:drawable/ic_menu_upload" />
+
+                        </LinearLayout>
 
                     </LinearLayout>
 
-                </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
 
-            </com.google.android.material.card.MaterialCardView>
+                <!-- Standard Process Button -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnProcess"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:text="Swap Faces"
+                    android:textSize="18sp"
+                    app:icon="@android:drawable/ic_menu_rotate"
+                    app:iconGravity="textStart"
+                    android:layout_marginBottom="8dp" />
 
-            <!-- Process Button -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnProcess"
-                android:layout_width="match_parent"
-                android:layout_height="60dp"
-                android:text="Swap Faces"
-                android:textSize="18sp"
-                app:icon="@android:drawable/ic_menu_rotate"
-                app:iconGravity="textStart"
-                app:layout_constraintTop_toBottomOf="@+id/targetCard"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                android:layout_marginBottom="8dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnReset"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Reset"
+                    app:icon="@android:drawable/ic_menu_revert"
+                    app:iconGravity="textStart"
+                    android:layout_marginBottom="16dp" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnReset"
-                style="@style/Widget.Material3.Button.OutlinedButton"
+            </LinearLayout>
+
+            <!-- Mode 2: Face Library & Multi-Face Mapping View Container -->
+            <LinearLayout
+                android:id="@+id/librarySwapContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Reset"
-                app:icon="@android:drawable/ic_menu_revert"
-                app:iconGravity="textStart"
-                app:layout_constraintTop_toBottomOf="@+id/btnProcess"
+                android:orientation="vertical"
+                android:visibility="gone"
+                app:layout_constraintTop_toBottomOf="@id/modeToggleGroup"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintEnd_toEndOf="parent"
-                android:layout_marginBottom="16dp" />
+                app:layout_constraintEnd_toEndOf="parent">
+
+                <!-- Saved Faces Library Card -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/savedLibraryCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="4dp"
+                    android:layout_marginBottom="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Saved Face Library"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnAddSavedFace"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="+ Add Face"
+                                app:icon="@android:drawable/ic_menu_add" />
+
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/emptyLibraryText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="No saved faces yet. Tap '+ Add Face' to store faces in your library!"
+                            android:textSize="13sp"
+                            android:textColor="?android:attr/textColorSecondary"
+                            android:gravity="center"
+                            android:padding="16dp"
+                            android:visibility="visible" />
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/savedFacesRecyclerView"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:clipToPadding="false"
+                            android:visibility="gone"
+                            tools:listitem="@layout/item_saved_face" />
+
+                    </LinearLayout>
+
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Library Target Image & Face Mapping Card -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/libraryTargetCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="4dp"
+                    android:layout_marginBottom="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Target Picture &amp; Face Mapping"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
+
+                        <com.pv.androidfacefusion.FaceOverlayImageView
+                            android:id="@+id/libraryTargetImageView"
+                            android:layout_width="match_parent"
+                            android:layout_height="220dp"
+                            android:scaleType="fitCenter"
+                            android:background="?attr/colorSurfaceVariant"
+                            android:contentDescription="Library target image"
+                            android:layout_marginBottom="8dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center"
+                            android:layout_marginBottom="12dp">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectLibraryTargetLocal"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Local Image"
+                                android:layout_marginEnd="8dp"
+                                app:icon="@android:drawable/ic_menu_gallery" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSelectLibraryTargetUrl"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="From URL"
+                                app:icon="@android:drawable/ic_menu_upload" />
+
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/libraryTargetStatusText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="13sp"
+                            android:textColor="?attr/colorPrimary"
+                            android:visibility="gone"
+                            android:layout_marginBottom="8dp"
+                            tools:text="Select a library face for each detected target face:" />
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/targetMappingRecyclerView"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:nestedScrollingEnabled="false"
+                            android:visibility="gone"
+                            tools:listitem="@layout/item_target_face_mapping" />
+
+                    </LinearLayout>
+
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Library Process Button -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLibraryProcess"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:text="Swap Faces using Library"
+                    android:textSize="18sp"
+                    app:icon="@android:drawable/ic_menu_rotate"
+                    app:iconGravity="textStart"
+                    android:layout_marginBottom="8dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLibraryReset"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Reset Target"
+                    app:icon="@android:drawable/ic_menu_revert"
+                    app:iconGravity="textStart"
+                    android:layout_marginBottom="16dp" />
+
+            </LinearLayout>
 
             <!-- Progress Bar -->
             <com.google.android.material.progressindicator.LinearProgressIndicator
@@ -244,7 +457,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:visibility="gone"
-                app:layout_constraintTop_toBottomOf="@+id/btnReset"
+                app:layout_constraintTop_toBottomOf="@+id/standardSwapContainer"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintEnd_toEndOf="parent"
                 android:layout_marginBottom="8dp"
@@ -261,7 +474,7 @@
                 android:layout_marginBottom="16dp"
                 tools:text="Processing... 25%" />
 
-            <!-- Result Image Section -->
+            <!-- Shared Result Image Section -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/resultCard"
                 android:layout_width="match_parent"
