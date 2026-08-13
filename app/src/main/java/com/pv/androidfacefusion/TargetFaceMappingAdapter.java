@@ -111,10 +111,10 @@ public class TargetFaceMappingAdapter extends RecyclerView.Adapter<TargetFaceMap
 
         ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(
             context,
-            android.R.layout.simple_spinner_item,
+            R.layout.spinner_selected_item,
             options
         );
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item);
         holder.spinner.setAdapter(spinnerAdapter);
 
         // Pre-select if previously selected
