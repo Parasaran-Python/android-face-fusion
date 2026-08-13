@@ -53,10 +53,11 @@
 
         <Spinner
             android:id="@+id/savedFaceSpinner"
-            android:layout_width="160dp"
+            android:layout_width="145dp"
             android:layout_height="48dp"
             android:spinnerMode="dropdown"
-            android:background="@android:drawable/btn_dropdown" />
+            android:background="@drawable/bg_spinner"
+            android:popupBackground="@drawable/bg_spinner_popup" />
 
     </LinearLayout>
 
