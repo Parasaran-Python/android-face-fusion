@@ -8,8 +8,8 @@
     android:textSize="15sp"
     android:textStyle="bold"
     android:textColor="?attr/colorOnSurface"
-    android:paddingStart="12dp"
-    android:paddingEnd="30dp"
+    android:paddingStart="10dp"
+    android:paddingEnd="26dp"
     android:paddingTop="10dp"
     android:paddingBottom="10dp"
     android:gravity="center_vertical" />
