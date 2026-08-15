@@ -1,5 +1,6 @@
 package com.pv.androidfacefusion;
 
+import android.os.Build;
 import android.util.Log;
 
 import ai.onnxruntime.OrtEnvironment;
@@ -40,9 +41,11 @@ public class OrtSessionHelper {
     public static OrtSession createSession(OrtEnvironment env, String modelPath, String tag, boolean tryNnapi) throws OrtException {
         int optimalThreads = getOptimalThreadCount();
 
-        if (tryNnapi) {
-            try {
-                OrtSession.SessionOptions nnapiOptions = new OrtSession.SessionOptions();
+        // NNAPI requires Android 8.1 (API Level 27) or higher
+        boolean canAttemptNnapi = tryNnapi && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1;
+
+        if (canAttemptNnapi) {
+            try (OrtSession.SessionOptions nnapiOptions = new OrtSession.SessionOptions()) {
                 nnapiOptions.setIntraOpNumThreads(optimalThreads);
                 nnapiOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
                 nnapiOptions.addNnapi();
@@ -50,24 +53,27 @@ public class OrtSessionHelper {
                 OrtSession session = env.createSession(modelPath, nnapiOptions);
                 Log.i(tag, "Successfully initialized model with NNAPI hardware acceleration (NPU/GPU): " + modelPath);
                 return session;
-            } catch (Exception e) {
-                Log.w(tag, "NNAPI acceleration unavailable or failed for " + modelPath + ", falling back to CPU: " + e.getMessage());
+            } catch (Throwable t) {
+                // Catch both OrtException and OutOfMemoryError (which can happen during NNAPI graph compilation of large models)
+                Log.w(tag, "NNAPI acceleration unavailable or failed for " + modelPath + ", falling back to CPU: " + t.getMessage());
             }
         }
 
-        // Fallback or explicit CPU configuration
-        OrtSession.SessionOptions cpuOptions = new OrtSession.SessionOptions();
-        cpuOptions.setIntraOpNumThreads(optimalThreads);
-        cpuOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-        
-        OrtSession session = env.createSession(modelPath, cpuOptions);
-        Log.i(tag, "Successfully initialized model on CPU with " + optimalThreads + " threads: " + modelPath);
-        return session;
+        // Fallback or explicit CPU configuration with proper resource management
+        try (OrtSession.SessionOptions cpuOptions = new OrtSession.SessionOptions()) {
+            cpuOptions.setIntraOpNumThreads(optimalThreads);
+            cpuOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            
+            OrtSession session = env.createSession(modelPath, cpuOptions);
+            Log.i(tag, "Successfully initialized model on CPU with " + optimalThreads + " threads: " + modelPath);
+            return session;
+        }
     }
 
     /**
      * Determines optimal CPU thread count based on device cores.
-     * Uses min(4, availableProcessors) to avoid thermal throttling and leave cores for UI.
+     * Uses min(4, availableProcessors) to avoid thermal throttling, prevent efficiency core
+     * bottlenecks on big.LITTLE architectures, and leave headroom for UI rendering.
      */
     public static int getOptimalThreadCount() {
         int cores = Runtime.getRuntime().availableProcessors();
