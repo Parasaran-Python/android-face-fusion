@@ -37,8 +37,8 @@ public class FaceEmbedder {
             
             Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
             
-            // Load directly from file path to avoid OOM with large files
-            session = env.createSession(modelFile.getAbsolutePath());
+            // Load with NNAPI hardware acceleration (NPU/GPU) and CPU fallback
+            session = OrtSessionHelper.createSession(env, modelFile.getAbsolutePath(), TAG);
             Log.d(TAG, "Face embedding model initialized successfully");
         } catch (Exception e) {
             Log.e(TAG, "Error loading face embedding model", e);
