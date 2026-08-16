@@ -47,7 +47,7 @@ public class FaceSwapper {
             
             Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
             
-            // Load with NNAPI hardware acceleration (NPU/GPU) and CPU fallback
+            // Load with optimized multi-threaded CPU configuration
             session = OrtSessionHelper.createSession(env, modelFile.getAbsolutePath(), TAG);
 
             // Resolve input names by tensor shape to avoid Set ordering issues
