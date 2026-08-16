@@ -47,9 +47,8 @@ public class FaceSwapper {
             
             Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
             
-            // Load directly from file path to avoid OOM with large files
-            // This is critical for the 555 MB inswapper model
-            session = env.createSession(modelFile.getAbsolutePath());
+            // Load with optimized multi-threaded CPU configuration
+            session = OrtSessionHelper.createSession(env, modelFile.getAbsolutePath(), TAG);
 
             // Resolve input names by tensor shape to avoid Set ordering issues
             // Python: input_names[0] = image (4D), input_names[1] = embedding (2D)
