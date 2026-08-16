@@ -1,6 +1,10 @@
 # Android Face Fusion
 
+[![Android CI](https://github.com/Parasaran-Python/android-face-fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/Parasaran-Python/android-face-fusion/actions/workflows/ci.yml)
+[![CodeQL Analysis](https://github.com/Parasaran-Python/android-face-fusion/actions/workflows/codeql.yml/badge.svg)](https://github.com/Parasaran-Python/android-face-fusion/actions/workflows/codeql.yml)
+
 Android app for face swapping using ONNX models on-device. Port of the Python [FaceFusion](https://github.com/facefusion/facefusion) pipeline.
+
 
 ## Quick Start
 

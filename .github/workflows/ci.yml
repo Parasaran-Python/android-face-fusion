@@ -1,0 +1,162 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper-validation:
+    name: Validate Gradle Wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+  python-check:
+    name: Validate Python Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify Python Script Syntax
+        run: python3 -m py_compile extract_emap.py
+
+  lint:
+    name: Android Lint Analysis
+    needs: [wrapper-validation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Android Lint
+        run: ./gradlew lintDebug --no-daemon
+
+      - name: Upload Lint Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidFaceFusion-lint-report
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+          retention-days: 14
+
+  unit-tests:
+    name: Unit Tests Suite
+    needs: [wrapper-validation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidFaceFusion-unit-test-results
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 14
+
+  build:
+    name: Build APKs & Verify 16 KB Page Alignment
+    needs: [lint, unit-tests, python-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Assemble Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Assemble Release APK (unsigned)
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify 16 KB Page Alignment Compliance
+        run: |
+          echo "Extracting native libraries to verify 16 KB page-size compliance..."
+          mkdir -p /tmp/debug_extracted /tmp/release_extracted
+          unzip -o app/build/outputs/apk/debug/app-debug.apk "lib/*" -d /tmp/debug_extracted
+          unzip -o app/build/outputs/apk/release/app-release-unsigned.apk "lib/*" -d /tmp/release_extracted
+          
+          for so in $(find /tmp/debug_extracted /tmp/release_extracted -name "*.so"); do
+            if [[ "$so" =~ (arm64-v8a|x86_64) ]]; then
+              echo "Checking 64-bit native library: $so"
+              non_aligned=$(readelf -W -l "$so" | awk '$1 == "LOAD" { align = $NF; if (align != "0x4000" && align != "0x10000" && align != "0x20000") print align }')
+              if [ -n "$non_aligned" ]; then
+                echo "::error file=$so::Found non-16KB aligned LOAD segments: $non_aligned"
+                exit 1
+              else
+                echo "  ✓ All LOAD segments >= 16 KB (0x4000+) aligned."
+              fi
+            fi
+          done
+          echo "All 64-bit native libraries verified for 16 KB page alignment!"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidFaceFusion-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidFaceFusion-release-unsigned-apk
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 30
