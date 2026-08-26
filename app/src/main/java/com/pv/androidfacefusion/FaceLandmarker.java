@@ -59,6 +59,7 @@ public final class FaceLandmarker {
         float faceHeight = Math.max(1.0f, face.bbox.height());
         float maxDimension = Math.max(faceWidth, faceHeight);
 
+        // FaceFusion 2DFAN uses scale=195/max(face width,height), then centers the bbox in 256.
         float cropSize = maxDimension * INPUT_SIZE / 195.0f;
         float centerX = face.bbox.centerX();
         float centerY = face.bbox.centerY();
@@ -67,15 +68,25 @@ public final class FaceLandmarker {
 
         Bitmap crop = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(crop);
-        Matrix matrix = new Matrix();
-        matrix.setRectToRect(
+        Matrix imageToCrop = new Matrix();
+        imageToCrop.setRectToRect(
             new RectF(cropLeft, cropTop, cropLeft + cropSize, cropTop + cropSize),
             new RectF(0, 0, INPUT_SIZE, INPUT_SIZE),
             Matrix.ScaleToFit.FILL);
-        canvas.drawBitmap(image, matrix, new Paint(Paint.FILTER_BITMAP_FLAG));
+        canvas.drawBitmap(image, imageToCrop, new Paint(Paint.FILTER_BITMAP_FLAG));
+
+        int faceAngle = estimateCardinalFaceAngle(face.landmarks);
+        Bitmap inferenceCrop = crop;
+        Matrix cropToInference = new Matrix();
+        if (faceAngle != 0) {
+            inferenceCrop = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
+            Canvas rotatedCanvas = new Canvas(inferenceCrop);
+            cropToInference.setRotate(faceAngle, INPUT_SIZE * 0.5f, INPUT_SIZE * 0.5f);
+            rotatedCanvas.drawBitmap(crop, cropToInference, new Paint(Paint.FILTER_BITMAP_FLAG));
+        }
 
         try {
-            float[] input = bitmapToInput(crop);
+            float[] input = bitmapToInput(inferenceCrop);
             try (OnnxTensor tensor = OnnxTensor.createTensor(
                     env, FloatBuffer.wrap(input), new long[]{1, 3, INPUT_SIZE, INPUT_SIZE});
                  OrtSession.Result outputs = session.run(Collections.singletonMap(inputName, tensor))) {
@@ -88,23 +99,61 @@ public final class FaceLandmarker {
                     return null;
                 }
 
-                float[] image68 = new float[136];
-                for (int i = 0; i < 68; i++) {
-                    float x256 = local68[i * 2] * 4.0f;
-                    float y256 = local68[i * 2 + 1] * 4.0f;
-                    image68[i * 2] = cropLeft + x256 * cropSize / INPUT_SIZE;
-                    image68[i * 2 + 1] = cropTop + y256 * cropSize / INPUT_SIZE;
+                Matrix inferenceToCrop = new Matrix();
+                if (faceAngle != 0 && !cropToInference.invert(inferenceToCrop)) {
+                    Log.w(TAG, "Could not invert landmarker pose transform");
+                    return null;
                 }
+
+                float[] image68 = new float[136];
+                float[] point = new float[2];
+                for (int i = 0; i < 68; i++) {
+                    point[0] = local68[i * 2] * 4.0f;
+                    point[1] = local68[i * 2 + 1] * 4.0f;
+                    if (faceAngle != 0) inferenceToCrop.mapPoints(point);
+                    image68[i * 2] = cropLeft + point[0] * cropSize / INPUT_SIZE;
+                    image68[i * 2 + 1] = cropTop + point[1] * cropSize / INPUT_SIZE;
+                }
+
                 float[] refined5 = convert68To5(image68);
                 if (!isValid(refined5, image.getWidth(), image.getHeight())) return null;
+                Log.d(TAG, "2DFAN refinement accepted: score=" + score + ", poseAngle=" + faceAngle);
                 return new Result(image68, refined5, score);
             }
         } catch (Exception e) {
             Log.w(TAG, "Landmark refinement failed; using detector landmarks", e);
             return null;
         } finally {
-            crop.recycle();
+            if (inferenceCrop != crop && !inferenceCrop.isRecycled()) inferenceCrop.recycle();
+            if (!crop.isRecycled()) crop.recycle();
         }
+    }
+
+    /**
+     * FaceFusion's landmarker is rotation-aware. SCRFD already gives us reliable eye points,
+     * so use their eye-line orientation to select the same cardinal 0/90/180/270 family.
+     * Normal and slight-side portraits stay at 0; rotated photos are normalized for 2DFAN.
+     */
+    private int estimateCardinalFaceAngle(float[] landmarks5) {
+        if (landmarks5 == null || landmarks5.length < 4) return 0;
+        float dx = landmarks5[2] - landmarks5[0];
+        float dy = landmarks5[3] - landmarks5[1];
+        if (!Float.isFinite(dx) || !Float.isFinite(dy) || (Math.abs(dx) + Math.abs(dy)) < 1e-4f) return 0;
+
+        double theta = Math.toDegrees(Math.atan2(dy, dx));
+        theta = (theta % 360.0 + 360.0) % 360.0;
+        int[] angles = {0, 90, 180, 270};
+        int best = 0;
+        double bestDistance = Double.POSITIVE_INFINITY;
+        for (int angle : angles) {
+            double distance = Math.abs(theta - angle);
+            distance = Math.min(distance, 360.0 - distance);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = angle;
+            }
+        }
+        return best;
     }
 
     private float[] bitmapToInput(Bitmap bitmap) {
@@ -114,6 +163,7 @@ public final class FaceLandmarker {
         float[] output = new float[plane * 3];
         for (int i = 0; i < plane; i++) {
             int pixel = pixels[i];
+            // 2DFAN consumes the OpenCV/BGR crop used by FaceFusion.
             output[i] = (pixel & 0xFF) / 255.0f;
             output[plane + i] = ((pixel >> 8) & 0xFF) / 255.0f;
             output[plane * 2 + i] = ((pixel >> 16) & 0xFF) / 255.0f;
