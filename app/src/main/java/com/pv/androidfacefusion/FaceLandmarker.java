@@ -56,7 +56,6 @@ public final class FaceLandmarker {
         float faceHeight = Math.max(1.0f, face.bbox.height());
         float maxDimension = Math.max(faceWidth, faceHeight);
 
-        // FaceFusion's 2DFAN4 crop maps the largest bbox dimension to 195px in a 256px crop.
         float cropSize = maxDimension * INPUT_SIZE / 195.0f;
         float centerX = face.bbox.centerX();
         float centerY = face.bbox.centerY();
@@ -82,7 +81,6 @@ public final class FaceLandmarker {
 
                 float[] image68 = new float[136];
                 for (int i = 0; i < 68; i++) {
-                    // FaceFusion maps 2DFAN4's 64-grid coordinate prediction back to 256px.
                     float x256 = local68[i * 2] * 4.0f;
                     float y256 = local68[i * 2 + 1] * 4.0f;
                     image68[i * 2] = cropLeft + x256 * cropSize / INPUT_SIZE;
@@ -107,9 +105,10 @@ public final class FaceLandmarker {
         float[] output = new float[plane * 3];
         for (int i = 0; i < plane; i++) {
             int pixel = pixels[i];
-            output[i] = ((pixel >> 16) & 0xFF) / 255.0f;
+            // FaceFusion feeds 2DFAN4 from its OpenCV/BGR vision frame without channel reversal.
+            output[i] = (pixel & 0xFF) / 255.0f;
             output[plane + i] = ((pixel >> 8) & 0xFF) / 255.0f;
-            output[plane * 2 + i] = (pixel & 0xFF) / 255.0f;
+            output[plane * 2 + i] = ((pixel >> 16) & 0xFF) / 255.0f;
         }
         return output;
     }
