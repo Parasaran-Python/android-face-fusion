@@ -1,17 +1,26 @@
 package com.pv.androidfacefusion;
 
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Matrix;
-import android.graphics.Paint;
 
-/** Alignment and paste-back helpers for HyperSwap 256. */
+import org.opencv.android.OpenCVLoader;
+import org.opencv.android.Utils;
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Point;
+import org.opencv.core.Scalar;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
+
+/**
+ * HyperSwap 256 alignment and paste-back using the same geometry, interpolation,
+ * border handling and soft oval mask as the proven ReActor CPU implementation.
+ */
 public final class SwapperImageUtils {
+    private static volatile boolean openCvReady;
+
     private SwapperImageUtils() {}
 
-    // Landmark geometry used by the proven working ReActor HyperSwap 256 path.
-    // Keep this paired with the same transform for paste-back so crop and inverse
-    // placement remain mathematically consistent.
     private static final float[][] HYPERSWAP_256_NORMALIZED = {
         {84.87f / 256.0f, 105.94f / 256.0f},
         {171.13f / 256.0f, 105.94f / 256.0f},
@@ -25,15 +34,32 @@ public final class SwapperImageUtils {
             return Bitmap.createScaledBitmap(image, targetSize, targetSize, true);
         }
 
-        float[][] src = unpackLandmarks(landmarks);
-        float[][] dst = scaledTemplate(targetSize);
-        Matrix transform = estimateSimilarityTransform(src, dst);
+        ensureOpenCv();
+        double[] affineValues = estimateSimilarityTransform(
+            unpackLandmarks(landmarks), scaledTemplate(targetSize));
 
-        Bitmap aligned = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(aligned);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
-        canvas.drawBitmap(image, transform, paint);
-        return aligned;
+        Mat source = new Mat();
+        Mat aligned = new Mat();
+        Mat affine = affineMat(affineValues);
+        try {
+            Utils.bitmapToMat(image, source);
+            Imgproc.warpAffine(
+                source,
+                aligned,
+                affine,
+                new Size(targetSize, targetSize),
+                Imgproc.INTER_CUBIC,
+                Core.BORDER_REFLECT,
+                new Scalar(0, 0, 0, 255));
+
+            Bitmap result = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888);
+            Utils.matToBitmap(aligned, result);
+            return result;
+        } finally {
+            source.release();
+            aligned.release();
+            affine.release();
+        }
     }
 
     public static Bitmap blendFace(Bitmap targetImage, Bitmap swappedFace, float[] landmarks, int faceSize) {
@@ -41,82 +67,133 @@ public final class SwapperImageUtils {
             return targetImage.copy(Bitmap.Config.ARGB_8888, true);
         }
 
-        float[][] src = unpackLandmarks(landmarks);
-        float[][] dst = scaledTemplate(faceSize);
-        Matrix transform = estimateSimilarityTransform(src, dst);
-        Matrix inverse = new Matrix();
-        if (!transform.invert(inverse)) {
-            return targetImage.copy(Bitmap.Config.ARGB_8888, true);
-        }
+        ensureOpenCv();
+        double[] affineValues = estimateSimilarityTransform(
+            unpackLandmarks(landmarks), scaledTemplate(faceSize));
 
         int width = targetImage.getWidth();
         int height = targetImage.getHeight();
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
 
-        Bitmap warpedFace = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        new Canvas(warpedFace).drawBitmap(swappedFace, inverse, paint);
+        Mat affine = affineMat(affineValues);
+        Mat inverse = new Mat();
+        Mat swappedMat = new Mat();
+        Mat warpedFaceMat = new Mat();
+        Mat cropMask = Mat.zeros(faceSize, faceSize, CvType.CV_32FC1);
+        Mat warpedMask = new Mat();
 
-        Bitmap cropMask = createFeatherMask(faceSize);
-        Bitmap warpedMask = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        new Canvas(warpedMask).drawBitmap(cropMask, inverse, paint);
+        try {
+            Imgproc.invertAffineTransform(affine, inverse);
+            Utils.bitmapToMat(swappedFace, swappedMat);
 
-        int pixelCount = width * height;
-        int[] targetPixels = new int[pixelCount];
-        int[] facePixels = new int[pixelCount];
-        int[] maskPixels = new int[pixelCount];
-        int[] resultPixels = new int[pixelCount];
+            // ReActor paste_back: high quality inverse face warp with a neutral gray border.
+            Imgproc.warpAffine(
+                swappedMat,
+                warpedFaceMat,
+                inverse,
+                new Size(width, height),
+                Imgproc.INTER_LANCZOS4,
+                Core.BORDER_CONSTANT,
+                new Scalar(127.5, 127.5, 127.5, 255));
 
-        targetImage.getPixels(targetPixels, 0, width, 0, 0, width, height);
-        warpedFace.getPixels(facePixels, 0, width, 0, 0, width, height);
-        warpedMask.getPixels(maskPixels, 0, width, 0, 0, width, height);
+            // ReActor mask: centered oval, axes 35% x 40%, Gaussian blur 15.
+            Imgproc.ellipse(
+                cropMask,
+                new Point(faceSize / 2.0, faceSize / 2.0),
+                new Size(faceSize * 0.35, faceSize * 0.40),
+                0.0,
+                0.0,
+                360.0,
+                new Scalar(1.0),
+                -1);
+            Imgproc.GaussianBlur(cropMask, cropMask, new Size(15, 15), 0.0);
 
-        for (int i = 0; i < pixelCount; i++) {
-            float alpha = ((maskPixels[i] >>> 24) & 0xFF) / 255.0f;
-            if (alpha <= 0.001f) {
+            Imgproc.warpAffine(
+                cropMask,
+                warpedMask,
+                inverse,
+                new Size(width, height),
+                Imgproc.INTER_CUBIC,
+                Core.BORDER_CONSTANT,
+                new Scalar(0.0));
+            Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(3, 3), 0.0);
+
+            Core.max(warpedMask, new Scalar(0.0), warpedMask);
+            Core.min(warpedMask, new Scalar(1.0), warpedMask);
+
+            Bitmap warpedFace = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            try {
+                Utils.matToBitmap(warpedFaceMat, warpedFace);
+                return blendWithFloatMask(targetImage, warpedFace, warpedMask);
+            } finally {
+                warpedFace.recycle();
+            }
+        } finally {
+            affine.release();
+            inverse.release();
+            swappedMat.release();
+            warpedFaceMat.release();
+            cropMask.release();
+            warpedMask.release();
+        }
+    }
+
+    private static Bitmap blendWithFloatMask(Bitmap target, Bitmap face, Mat mask) {
+        int width = target.getWidth();
+        int height = target.getHeight();
+        int count = width * height;
+
+        int[] targetPixels = new int[count];
+        int[] facePixels = new int[count];
+        int[] resultPixels = new int[count];
+        float[] maskValues = new float[count];
+
+        target.getPixels(targetPixels, 0, width, 0, 0, width, height);
+        face.getPixels(facePixels, 0, width, 0, 0, width, height);
+        mask.get(0, 0, maskValues);
+
+        for (int i = 0; i < count; i++) {
+            float alpha = Math.max(0.0f, Math.min(1.0f, maskValues[i]));
+            if (alpha <= 0.0001f) {
                 resultPixels[i] = targetPixels[i];
                 continue;
             }
 
-            int tr = (targetPixels[i] >> 16) & 0xFF;
-            int tg = (targetPixels[i] >> 8) & 0xFF;
-            int tb = targetPixels[i] & 0xFF;
-            int fr = (facePixels[i] >> 16) & 0xFF;
-            int fg = (facePixels[i] >> 8) & 0xFF;
-            int fb = facePixels[i] & 0xFF;
+            int targetPixel = targetPixels[i];
+            int facePixel = facePixels[i];
 
-            int r = clamp(Math.round(fr * alpha + tr * (1.0f - alpha)));
-            int g = clamp(Math.round(fg * alpha + tg * (1.0f - alpha)));
-            int b = clamp(Math.round(fb * alpha + tb * (1.0f - alpha)));
+            int tr = (targetPixel >> 16) & 0xFF;
+            int tg = (targetPixel >> 8) & 0xFF;
+            int tb = targetPixel & 0xFF;
+            int fr = (facePixel >> 16) & 0xFF;
+            int fg = (facePixel >> 8) & 0xFF;
+            int fb = facePixel & 0xFF;
+
+            int r = clamp(Math.round(tr * (1.0f - alpha) + fr * alpha));
+            int g = clamp(Math.round(tg * (1.0f - alpha) + fg * alpha));
+            int b = clamp(Math.round(tb * (1.0f - alpha) + fb * alpha));
             resultPixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
 
         Bitmap result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         result.setPixels(resultPixels, 0, width, 0, 0, width, height);
-
-        cropMask.recycle();
-        warpedMask.recycle();
-        warpedFace.recycle();
         return result;
     }
 
-    private static Bitmap createFeatherMask(int size) {
-        Bitmap mask = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        int[] pixels = new int[size * size];
-        float hardInset = size * 0.08f;
-        float feather = Math.max(8.0f, size * 0.12f);
-
-        for (int y = 0; y < size; y++) {
-            for (int x = 0; x < size; x++) {
-                float edge = Math.min(Math.min(x, size - 1 - x), Math.min(y, size - 1 - y));
-                float alpha = (edge - hardInset) / feather;
-                alpha = Math.max(0.0f, Math.min(1.0f, alpha));
-                alpha = alpha * alpha * (3.0f - 2.0f * alpha);
-                int a = clamp(Math.round(alpha * 255.0f));
-                pixels[y * size + x] = (a << 24) | 0x00FFFFFF;
+    private static void ensureOpenCv() {
+        if (openCvReady) return;
+        synchronized (SwapperImageUtils.class) {
+            if (openCvReady) return;
+            if (!OpenCVLoader.initLocal()) {
+                throw new IllegalStateException("OpenCV failed to initialize for HyperSwap");
             }
+            openCvReady = true;
         }
-        mask.setPixels(pixels, 0, size, 0, 0, size, size);
-        return mask;
+    }
+
+    private static Mat affineMat(double[] values) {
+        Mat affine = new Mat(2, 3, CvType.CV_64FC1);
+        affine.put(0, 0, values);
+        return affine;
     }
 
     private static float[][] unpackLandmarks(float[] landmarks) {
@@ -137,9 +214,10 @@ public final class SwapperImageUtils {
         return result;
     }
 
-    private static Matrix estimateSimilarityTransform(float[][] src, float[][] dst) {
+    /** Closed-form least-squares 2D similarity transform, source -> destination. */
+    private static double[] estimateSimilarityTransform(float[][] src, float[][] dst) {
         int n = src.length;
-        float srcCx = 0f, srcCy = 0f, dstCx = 0f, dstCy = 0f;
+        double srcCx = 0.0, srcCy = 0.0, dstCx = 0.0, dstCy = 0.0;
         for (int i = 0; i < n; i++) {
             srcCx += src[i][0];
             srcCy += src[i][1];
@@ -151,31 +229,31 @@ public final class SwapperImageUtils {
         dstCx /= n;
         dstCy /= n;
 
-        float srcNorm = 0f;
-        float a = 0f;
-        float b = 0f;
+        double srcNorm = 0.0;
+        double a = 0.0;
+        double b = 0.0;
         for (int i = 0; i < n; i++) {
-            float sx = src[i][0] - srcCx;
-            float sy = src[i][1] - srcCy;
-            float dx = dst[i][0] - dstCx;
-            float dy = dst[i][1] - dstCy;
+            double sx = src[i][0] - srcCx;
+            double sy = src[i][1] - srcCy;
+            double dx = dst[i][0] - dstCx;
+            double dy = dst[i][1] - dstCy;
             srcNorm += sx * sx + sy * sy;
             a += sx * dx + sy * dy;
             b += sx * dy - sy * dx;
         }
 
-        if (srcNorm < 1e-10f) return new Matrix();
+        if (srcNorm < 1e-10) {
+            throw new IllegalArgumentException("Invalid face landmarks for HyperSwap alignment");
+        }
 
-        float m00 = a / srcNorm;
-        float m01 = -b / srcNorm;
-        float m10 = b / srcNorm;
-        float m11 = a / srcNorm;
-        float tx = dstCx - (m00 * srcCx + m01 * srcCy);
-        float ty = dstCy - (m10 * srcCx + m11 * srcCy);
+        double m00 = a / srcNorm;
+        double m01 = -b / srcNorm;
+        double m10 = b / srcNorm;
+        double m11 = a / srcNorm;
+        double tx = dstCx - (m00 * srcCx + m01 * srcCy);
+        double ty = dstCy - (m10 * srcCx + m11 * srcCy);
 
-        Matrix matrix = new Matrix();
-        matrix.setValues(new float[]{m00, m01, tx, m10, m11, ty, 0f, 0f, 1f});
-        return matrix;
+        return new double[]{m00, m01, tx, m10, m11, ty};
     }
 
     private static int clamp(int value) {
