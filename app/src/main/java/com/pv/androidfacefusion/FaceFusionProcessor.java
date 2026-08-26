@@ -115,8 +115,6 @@ public class FaceFusionProcessor {
 
         float[] sourceEmbedding = getSourceEmbedding(sourceImage, sourceFaces.get(0));
 
-        // Always process against a dedicated mutable working bitmap so the caller's original
-        // target can never be modified in place by ROI compositing.
         Bitmap workingTarget = targetImage.copy(Bitmap.Config.ARGB_8888, true);
         try {
             Bitmap result = swapOne(workingTarget, targetFaces.get(targetFaceIndex), sourceEmbedding);
@@ -167,16 +165,27 @@ public class FaceFusionProcessor {
         int qualitySize = FaceSwapper.QUALITY_SIZE;
         Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetLandmarks, qualitySize);
         float[] semanticMask = faceParser != null ? faceParser.createMask(alignedTarget) : null;
+        IdentityStrengthSettings.Level identityStrength = IdentityStrengthSettings.get(faceSwapper.getAppContext());
+        float[] identityMask = IdentityStrengthUtils.strengthenMask(semanticMask, identityStrength);
         Bitmap swappedFace = null;
+        Bitmap naturalisationReference = null;
         try {
             swappedFace = faceSwapper.swapFaceQuality(alignedTarget, sourceEmbedding);
             swappedFace = refineGeneratedExpression(swappedFace, targetLandmarks, targetLandmarks68, qualitySize);
-            return SwapperImageUtils.blendFace(targetImage, alignedTarget, swappedFace,
-                targetLandmarks, targetLandmarks68, qualitySize, semanticMask);
+            naturalisationReference = IdentityStrengthUtils.createNaturalisationReference(
+                alignedTarget, swappedFace, identityStrength);
+            Log.d(TAG, "Compositing " + faceSwapper.getActiveModelName() + " at "
+                + identityStrength.displayName + " identity strength");
+            return SwapperImageUtils.blendFace(targetImage, naturalisationReference, swappedFace,
+                targetLandmarks, targetLandmarks68, qualitySize, identityMask);
         } catch (Exception qualityError) {
             throw new Exception(faceSwapper.getActiveModelName() + " quality face swap failed: "
                 + qualityError.getMessage(), qualityError);
         } finally {
+            if (naturalisationReference != null && naturalisationReference != alignedTarget
+                    && naturalisationReference != swappedFace && !naturalisationReference.isRecycled()) {
+                naturalisationReference.recycle();
+            }
             if (!alignedTarget.isRecycled()) alignedTarget.recycle();
             if (swappedFace != null && !swappedFace.isRecycled()) swappedFace.recycle();
         }
@@ -241,11 +250,7 @@ public class FaceFusionProcessor {
         return faceLandmarker != null ? faceLandmarker.refine(image, face) : null;
     }
 
-    /**
-     * Trust 2DFAN once its own confidence and coordinate validation have accepted the result.
-     * SCRFD remains the fallback only when refined geometry is genuinely unavailable, not merely
-     * because a talking, smiling or side-view face legitimately differs from detector anchors.
-     */
+    /** Trust 2DFAN after its own confidence/coordinate validation; SCRFD is only the real fallback. */
     private float[] selectPreferredLandmarks5(FaceDetector.Face face, FaceLandmarker.Result refined) {
         if (refined != null && refined.landmarks5 != null && refined.landmarks5.length >= 10) {
             return refined.landmarks5;
