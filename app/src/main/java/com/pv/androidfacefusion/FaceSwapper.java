@@ -231,17 +231,55 @@ public class FaceSwapper {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         int[] pixels = new int[width * height];
 
-        // HyperSwap output is normalized with mean/std 0.5; reverse it to RGB [0,255].
+        // HyperSwap has a known CPU output-range quirk. Some runtimes return
+        // normalized [-1,1]/[0,1] values while others can already return pixel-scale
+        // values. Detect the range before converting instead of always applying tanh
+        // denormalization. This mirrors the proven ReActor CPU normalization fix.
+        float min = Float.POSITIVE_INFINITY;
+        float max = Float.NEGATIVE_INFINITY;
+        for (int c = 0; c < Math.min(3, data.length); c++) {
+            for (int y = 0; y < data[c].length; y++) {
+                for (int x = 0; x < data[c][y].length; x++) {
+                    float value = data[c][y][x];
+                    if (!Float.isNaN(value) && !Float.isInfinite(value)) {
+                        min = Math.min(min, value);
+                        max = Math.max(max, value);
+                    }
+                }
+            }
+        }
+
+        boolean normalizedOutput = min < 0.0f || max <= 1.5f;
+        Log.i(TAG, "HyperSwap raw output range min=" + min + ", max=" + max
+            + ", normalized=" + normalizedOutput);
+
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int r = clampToByte((data[0][y][x] * 0.5f + 0.5f) * 255.0f);
-                int g = clampToByte((data[1][y][x] * 0.5f + 0.5f) * 255.0f);
-                int b = clampToByte((data[2][y][x] * 0.5f + 0.5f) * 255.0f);
+                float rv = sanitizeHyperSwapValue(data[0][y][x]);
+                float gv = sanitizeHyperSwapValue(data[1][y][x]);
+                float bv = sanitizeHyperSwapValue(data[2][y][x]);
+
+                if (normalizedOutput) {
+                    rv = (rv + 1.0f) * 0.5f * 255.0f;
+                    gv = (gv + 1.0f) * 0.5f * 255.0f;
+                    bv = (bv + 1.0f) * 0.5f * 255.0f;
+                }
+
+                int r = clampToByte(rv);
+                int g = clampToByte(gv);
+                int b = clampToByte(bv);
                 pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
             }
         }
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
         return bitmap;
+    }
+
+    private float sanitizeHyperSwapValue(float value) {
+        if (Float.isNaN(value)) return 0.0f;
+        if (value == Float.POSITIVE_INFINITY) return 255.0f;
+        if (value == Float.NEGATIVE_INFINITY) return 0.0f;
+        return value;
     }
 
     private Bitmap inSwapperOutputToBitmap(float[][][] data) {
