@@ -125,7 +125,7 @@ public final class SwapperImageUtils {
         Mat roiMatrix = offsetAffine(inverse, roi[0], roi[1]);
         try {
             cropMask.put(0, 0, cropMaskValues);
-            Imgproc.GaussianBlur(cropMask, cropMask, new Size(15, 15), 0.0);
+            Imgproc.GaussianBlur(cropMask, cropMask, new Size(0, 0), Math.max(3.0, faceSize * 0.012));
             Core.max(cropMask, new Scalar(0.0), cropMask);
             Core.min(cropMask, new Scalar(1.0), cropMask);
 
@@ -134,7 +134,7 @@ public final class SwapperImageUtils {
                 Imgproc.INTER_LANCZOS4, Core.BORDER_CONSTANT, new Scalar(127.5, 127.5, 127.5, 255));
             Imgproc.warpAffine(cropMask, warpedMask, roiMatrix, new Size(roiWidth, roiHeight),
                 Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, new Scalar(0.0));
-            Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(3, 3), 0.0);
+            Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(0, 0), Math.max(1.2, Math.min(3.0, Math.max(roiWidth, roiHeight) * 0.004)));
             Core.max(warpedMask, new Scalar(0.0), warpedMask);
             Core.min(warpedMask, new Scalar(1.0), warpedMask);
 
@@ -180,16 +180,21 @@ public final class SwapperImageUtils {
         if (landmarks68 != null && landmarks68.length >= 136) {
             float[] poseMask = createPoseContourMask(size, affine, landmarks68);
             if (poseMask != null) {
-                for (int i = 0; i < mask.length; i++) mask[i] *= poseMask[i];
+                for (int i = 0; i < mask.length; i++) {
+                    // The semantic parser remains the hard protection for hair/background.
+                    // The 68-point contour is now a soft pose guide rather than a second hard
+                    // cut-out, avoiding the visible face-shaped frame on cheeks/temples/jaw.
+                    float poseInfluence = 0.32f + 0.68f * clamp01(poseMask[i]);
+                    mask[i] *= poseInfluence;
+                }
             }
         }
         return mask;
     }
 
     /**
-     * Build a soft face silhouette from the real jaw and brow geometry. The brow arc is
-     * lifted slightly to cover the forehead while BiSeNet remains responsible for excluding hair.
-     * This narrows the far cheek/temple naturally when the head is turned.
+     * Build a broad, soft face silhouette from the real jaw and brow geometry. BiSeNet still
+     * excludes hair/background, while this contour only nudges the blend toward the true pose.
      */
     private static float[] createPoseContourMask(int size, Mat affine, float[] landmarks68) {
         double[] a = new double[6];
@@ -198,7 +203,7 @@ public final class SwapperImageUtils {
 
         for (int i = 0; i <= 16; i++) polygon.add(transformPoint(landmarks68, i, a));
 
-        double foreheadLift = size * 0.115;
+        double foreheadLift = size * 0.13;
         for (int i = 26; i >= 17; i--) {
             Point p = transformPoint(landmarks68, i, a);
             polygon.add(new Point(p.x, p.y - foreheadLift));
@@ -210,7 +215,7 @@ public final class SwapperImageUtils {
         try {
             contour.fromList(polygon);
             Imgproc.fillConvexPoly(contourMask, contour, new Scalar(1.0));
-            Imgproc.GaussianBlur(contourMask, contourMask, new Size(0, 0), Math.max(2.0, size * 0.009));
+            Imgproc.GaussianBlur(contourMask, contourMask, new Size(0, 0), Math.max(3.0, size * 0.018));
             Core.max(contourMask, new Scalar(0.0), contourMask);
             Core.min(contourMask, new Scalar(1.0), contourMask);
             float[] result = new float[size * size];
