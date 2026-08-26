@@ -10,6 +10,8 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.HashMap;
+import java.util.Map;
 
 import ai.onnxruntime.NodeInfo;
 import ai.onnxruntime.OnnxTensor;
@@ -19,61 +21,78 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.TensorInfo;
 
 /**
- * Face swapper using ONNX model for face swapping
- * Matches Python INSwapper implementation
+ * Face swapper with HyperSwap 1b 256 as the primary model and the legacy
+ * INSwapper 128 pipeline retained as an automatic compatibility fallback.
  */
 public class FaceSwapper {
     private static final String TAG = "FaceSwapper";
-    private static final int INPUT_SIZE = 128;
-    
-    private OrtEnvironment env;
+    private static final int HYPERSWAP_SIZE = 256;
+    private static final int INSWAPPER_SIZE = 128;
+
+    private enum Backend {
+        HYPERSWAP,
+        INSWAPPER
+    }
+
+    private final Context context;
+    private final OrtEnvironment env;
     private OrtSession session;
-    private Context context;
-    private float[][] emap;  // Embedding transformation matrix
-    private String imageInputName;     // Resolved model input name for image
-    private String embeddingInputName; // Resolved model input name for embedding
+    private Backend backend;
+    private int inputSize = HYPERSWAP_SIZE;
+    private String imageInputName;
+    private String embeddingInputName;
+    private float[][] emap;
 
     public FaceSwapper(Context context) {
-        this.context = context;
+        this.context = context.getApplicationContext();
         this.env = OrtEnvironment.getEnvironment();
     }
 
     public void initialize() throws Exception {
+        ModelDownloader downloader = new ModelDownloader(context);
+
         try {
-            // Download model if needed and load from file path directly
-            Log.d(TAG, "Loading face swapping model...");
-            ModelDownloader downloader = new ModelDownloader(context);
-            File modelFile = downloader.getModelFile("inswapper_128.onnx");
-            
-            Log.d(TAG, "Model file ready, size: " + modelFile.length() + " bytes");
-            
-            // Load with optimized multi-threaded CPU configuration
-            session = OrtSessionHelper.createSession(env, modelFile.getAbsolutePath(), TAG);
-
-            // Resolve input names by tensor shape to avoid Set ordering issues
-            // Python: input_names[0] = image (4D), input_names[1] = embedding (2D)
+            Log.i(TAG, "Loading HyperSwap 1b 256...");
+            File model = downloader.getModelFile(ModelDownloader.HYPERSWAP_MODEL);
+            session = OrtSessionHelper.createSession(env, model.getAbsolutePath(), TAG);
+            backend = Backend.HYPERSWAP;
+            inputSize = HYPERSWAP_SIZE;
             resolveInputNames();
+            validateHyperSwapInputs();
+            Log.i(TAG, "HyperSwap 1b 256 initialized successfully");
+            return;
+        } catch (Exception hyperSwapError) {
+            Log.e(TAG, "HyperSwap initialization failed; falling back to INSwapper 128", hyperSwapError);
+            closeSessionOnly();
+        }
 
-            // Extract emap from model (last initializer)
-            // This is critical for proper embedding transformation
-            extractEmap(modelFile);
-            
-            Log.d(TAG, "Face swapping model initialized successfully with emap");
-        } catch (Exception e) {
-            Log.e(TAG, "Error loading face swapping model", e);
-            throw new Exception("Failed to load face swapping model: " + e.getMessage());
+        try {
+            File model = downloader.getModelFile(ModelDownloader.INSWAPPER_MODEL);
+            session = OrtSessionHelper.createSession(env, model.getAbsolutePath(), TAG);
+            backend = Backend.INSWAPPER;
+            inputSize = INSWAPPER_SIZE;
+            resolveInputNames();
+            emap = loadEmapFromAssets();
+            Log.w(TAG, "Using legacy INSwapper 128 fallback");
+        } catch (Exception fallbackError) {
+            closeSessionOnly();
+            throw new Exception("HyperSwap and INSwapper fallback both failed: " + fallbackError.getMessage(), fallbackError);
         }
     }
-    
-    /**
-     * Resolve input names by tensor shape to ensure correct ordering.
-     * Java Set doesn't guarantee iteration order, so we match by shape:
-     * - Image input: 4D tensor [1, 3, 128, 128]
-     * - Embedding input: 2D tensor [1, 512]
-     */
+
+    public int getInputSize() {
+        return inputSize;
+    }
+
+    public boolean isUsingHyperSwap() {
+        return backend == Backend.HYPERSWAP;
+    }
+
     private void resolveInputNames() throws Exception {
-        java.util.Map<String, NodeInfo> inputInfo = session.getInputInfo();
-        for (java.util.Map.Entry<String, NodeInfo> entry : inputInfo.entrySet()) {
+        imageInputName = null;
+        embeddingInputName = null;
+
+        for (Map.Entry<String, NodeInfo> entry : session.getInputInfo().entrySet()) {
             TensorInfo tensorInfo = (TensorInfo) entry.getValue().getInfo();
             long[] shape = tensorInfo.getShape();
             if (shape.length == 4) {
@@ -82,169 +101,170 @@ public class FaceSwapper {
                 embeddingInputName = entry.getKey();
             }
         }
-        Log.d(TAG, "Resolved input names: image=" + imageInputName + ", embedding=" + embeddingInputName);
 
         if (imageInputName == null || embeddingInputName == null) {
-            throw new Exception("Could not resolve model input names by shape");
+            throw new Exception("Could not resolve swapper image/embedding inputs from ONNX tensor shapes");
         }
+        Log.d(TAG, "Resolved inputs: embedding=" + embeddingInputName + ", image=" + imageInputName);
     }
 
-    /**
-     * Extract the emap transformation matrix from the ONNX model
-     * This matches the Python code: self.emap = numpy_helper.to_array(graph.initializer[-1])
-     * 
-     * The EMAP is a learned 512x512 transformation matrix that is CRITICAL for proper face swapping.
-     * It must be extracted from the ONNX model using the extract_emap.py script and placed in assets/
-     */
-    private void extractEmap(File modelFile) {
-        try {
-            // Try to load pre-extracted EMAP from assets
-            Log.d(TAG, "Loading EMAP from assets...");
-            emap = loadEmapFromAssets();
-            
-            if (emap != null) {
-                Log.d(TAG, "✅ EMAP loaded successfully from assets: " + emap.length + "x" + emap[0].length);
-                
-                // Verify it's not an identity matrix
-                boolean isIdentity = true;
-                for (int i = 0; i < Math.min(10, emap.length) && isIdentity; i++) {
-                    for (int j = 0; j < Math.min(10, emap[0].length) && isIdentity; j++) {
-                        float expected = (i == j) ? 1.0f : 0.0f;
-                        if (Math.abs(emap[i][j] - expected) > 0.01f) {
-                            isIdentity = false;
-                        }
-                    }
-                }
-                
-                if (isIdentity) {
-                    Log.w(TAG, "⚠️  WARNING: EMAP appears to be identity matrix - this will reduce quality!");
-                } else {
-                    Log.d(TAG, "✅ EMAP is a proper learned transformation matrix");
-                }
-                return;
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to load EMAP from assets", e);
+    private void validateHyperSwapInputs() throws Exception {
+        NodeInfo imageNode = session.getInputInfo().get(imageInputName);
+        NodeInfo embeddingNode = session.getInputInfo().get(embeddingInputName);
+        if (imageNode == null || embeddingNode == null) {
+            throw new Exception("HyperSwap inputs not found");
         }
-        
-        // Fallback: Use identity matrix (WILL REDUCE QUALITY!)
-        Log.w(TAG, "⚠️  CRITICAL: Using identity matrix for EMAP - quality will be reduced!");
-        Log.w(TAG, "To fix: Run extract_emap.py and copy emap.bin to app/src/main/assets/");
-        
-        int emapSize = 512;
-        emap = new float[emapSize][emapSize];
-        
-        // Initialize as identity matrix
-        for (int i = 0; i < emapSize; i++) {
-            for (int j = 0; j < emapSize; j++) {
-                emap[i][j] = (i == j) ? 1.0f : 0.0f;
-            }
+
+        long[] imageShape = ((TensorInfo) imageNode.getInfo()).getShape();
+        long[] embeddingShape = ((TensorInfo) embeddingNode.getInfo()).getShape();
+        if (imageShape.length != 4 || imageShape[1] != 3) {
+            throw new Exception("Unexpected HyperSwap image input shape");
         }
-    }
-    
-    /**
-     * Load EMAP from assets/emap.bin
-     * File format: 8 bytes header (2 ints: rows, cols) + float32 matrix data
-     */
-    private float[][] loadEmapFromAssets() throws IOException {
-        try (InputStream fis = context.getAssets().open("emap.bin")) {
-            // Read header (2 ints: rows, cols)
-            byte[] header = new byte[8];
-            if (fis.read(header) != 8) {
-                throw new IOException("Failed to read EMAP header");
-            }
-            
-            ByteBuffer headerBuffer = ByteBuffer.wrap(header);
-            headerBuffer.order(ByteOrder.LITTLE_ENDIAN);
-            int rows = headerBuffer.getInt();
-            int cols = headerBuffer.getInt();
-            
-            Log.d(TAG, "EMAP dimensions from file: " + rows + "x" + cols);
-            
-            if (rows != 512 || cols != 512) {
-                throw new IOException("Invalid EMAP dimensions: " + rows + "x" + cols + " (expected 512x512)");
-            }
-            
-            // Read matrix data
-            int dataSize = rows * cols * 4; // 4 bytes per float
-            byte[] data = new byte[dataSize];
-            int totalRead = 0;
-            while (totalRead < dataSize) {
-                int read = fis.read(data, totalRead, dataSize - totalRead);
-                if (read == -1) {
-                    throw new IOException("Unexpected end of file reading EMAP data");
-                }
-                totalRead += read;
-            }
-            
-            // Convert to float array
-            ByteBuffer buffer = ByteBuffer.wrap(data);
-            buffer.order(ByteOrder.LITTLE_ENDIAN);
-            
-            float[][] matrix = new float[rows][cols];
-            for (int i = 0; i < rows; i++) {
-                for (int j = 0; j < cols; j++) {
-                    matrix[i][j] = buffer.getFloat();
-                }
-            }
-            
-            return matrix;
+        if (imageShape[2] > 0 && imageShape[2] != HYPERSWAP_SIZE) {
+            throw new Exception("Expected HyperSwap height 256 but model reports " + imageShape[2]);
+        }
+        if (imageShape[3] > 0 && imageShape[3] != HYPERSWAP_SIZE) {
+            throw new Exception("Expected HyperSwap width 256 but model reports " + imageShape[3]);
+        }
+        if (embeddingShape.length != 2 || (embeddingShape[1] > 0 && embeddingShape[1] != 512)) {
+            throw new Exception("Unexpected HyperSwap embedding input shape");
         }
     }
 
     public Bitmap swapFace(Bitmap targetFace, float[] sourceEmbedding, Bitmap targetImage) throws OrtException {
-        if (session == null) {
-            throw new IllegalStateException("Model not initialized");
+        if (session == null || backend == null) {
+            throw new IllegalStateException("Face swapper not initialized");
+        }
+        if (sourceEmbedding == null || sourceEmbedding.length != 512) {
+            throw new IllegalArgumentException("Expected a 512-dimensional source embedding");
         }
 
-        // Preprocess target face
-        Bitmap resizedTarget = Bitmap.createScaledBitmap(targetFace, INPUT_SIZE, INPUT_SIZE, true);
-        float[] targetData = bitmapToFloatArray(resizedTarget);
+        Bitmap resizedTarget = targetFace;
+        if (targetFace.getWidth() != inputSize || targetFace.getHeight() != inputSize) {
+            resizedTarget = Bitmap.createScaledBitmap(targetFace, inputSize, inputSize, true);
+        }
 
-        // Transform source embedding with emap (matching Python code)
-        // Python: latent = np.dot(latent, self.emap)
-        //         latent /= np.linalg.norm(latent)
-        float[] transformedEmbedding = applyEmapTransformation(sourceEmbedding);
-        
-        // Create input tensors
-        long[] imageShape = {1, 3, INPUT_SIZE, INPUT_SIZE};
-        long[] embeddingShape = {1, transformedEmbedding.length};
-        
-        OnnxTensor targetTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(targetData), imageShape);
-        OnnxTensor embeddingTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(transformedEmbedding), embeddingShape);
+        float[] imageData = backend == Backend.HYPERSWAP
+            ? bitmapToHyperSwapArray(resizedTarget)
+            : bitmapToInSwapperArray(resizedTarget);
 
-        // Use resolved input names (determined by shape during initialization)
-        Log.d(TAG, "Model input names: image=" + imageInputName + ", embedding=" + embeddingInputName);
+        float[] identity = backend == Backend.HYPERSWAP
+            ? l2Normalize(sourceEmbedding)
+            : applyEmapTransformation(sourceEmbedding);
 
-        // Run inference
-        java.util.Map<String, OnnxTensor> inputs = new java.util.HashMap<>();
-        inputs.put(imageInputName, targetTensor);
-        inputs.put(embeddingInputName, embeddingTensor);
-        
-        OrtSession.Result results = session.run(inputs);
+        long[] imageShape = {1, 3, inputSize, inputSize};
+        long[] embeddingShape = {1, identity.length};
 
-        // Get swapped face
-        float[][][][] outputData = (float[][][][]) results.get(0).getValue();
-        Bitmap swappedFace = floatArrayToBitmap(outputData[0]);
-        
-        targetTensor.close();
-        embeddingTensor.close();
-        results.close();
+        try (OnnxTensor imageTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(imageData), imageShape);
+             OnnxTensor embeddingTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(identity), embeddingShape)) {
 
-        return swappedFace;
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            inputs.put(imageInputName, imageTensor);
+            inputs.put(embeddingInputName, embeddingTensor);
+
+            try (OrtSession.Result results = session.run(inputs)) {
+                float[][][][] output = (float[][][][]) results.get(0).getValue();
+                return backend == Backend.HYPERSWAP
+                    ? hyperSwapOutputToBitmap(output[0])
+                    : inSwapperOutputToBitmap(output[0]);
+            }
+        } finally {
+            if (resizedTarget != targetFace && !resizedTarget.isRecycled()) {
+                resizedTarget.recycle();
+            }
+        }
     }
-    
-    /**
-     * Apply emap transformation to embedding
-     * Matches Python: latent = np.dot(latent, self.emap); latent /= np.linalg.norm(latent)
-     */
+
+    private float[] bitmapToHyperSwapArray(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        float[] output = new float[3 * pixels.length];
+
+        // FaceFusion HyperSwap: RGB in [0,1], then mean=.5/std=.5 => [-1,1].
+        for (int i = 0; i < pixels.length; i++) {
+            int pixel = pixels[i];
+            float r = ((pixel >> 16) & 0xFF) / 255.0f;
+            float g = ((pixel >> 8) & 0xFF) / 255.0f;
+            float b = (pixel & 0xFF) / 255.0f;
+            output[i] = (r - 0.5f) / 0.5f;
+            output[pixels.length + i] = (g - 0.5f) / 0.5f;
+            output[2 * pixels.length + i] = (b - 0.5f) / 0.5f;
+        }
+        return output;
+    }
+
+    private float[] bitmapToInSwapperArray(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        float[] output = new float[3 * pixels.length];
+
+        for (int i = 0; i < pixels.length; i++) {
+            int pixel = pixels[i];
+            output[i] = ((pixel >> 16) & 0xFF) / 255.0f;
+            output[pixels.length + i] = ((pixel >> 8) & 0xFF) / 255.0f;
+            output[2 * pixels.length + i] = (pixel & 0xFF) / 255.0f;
+        }
+        return output;
+    }
+
+    private Bitmap hyperSwapOutputToBitmap(float[][][] data) {
+        int height = data[0].length;
+        int width = data[0][0].length;
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        int[] pixels = new int[width * height];
+
+        // HyperSwap output is tanh-like; reverse mean/std normalization.
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int r = clampToByte((data[0][y][x] * 0.5f + 0.5f) * 255.0f);
+                int g = clampToByte((data[1][y][x] * 0.5f + 0.5f) * 255.0f);
+                int b = clampToByte((data[2][y][x] * 0.5f + 0.5f) * 255.0f);
+                pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
+        return bitmap;
+    }
+
+    private Bitmap inSwapperOutputToBitmap(float[][][] data) {
+        int height = data[0].length;
+        int width = data[0][0].length;
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        int[] pixels = new int[width * height];
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int r = clampToByte(data[0][y][x] * 255.0f);
+                int g = clampToByte(data[1][y][x] * 255.0f);
+                int b = clampToByte(data[2][y][x] * 255.0f);
+                pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
+        return bitmap;
+    }
+
+    private float[] l2Normalize(float[] embedding) {
+        float norm = 0.0f;
+        for (float value : embedding) norm += value * value;
+        norm = (float) Math.sqrt(norm);
+        float[] normalized = new float[embedding.length];
+        if (norm <= 0.0f) {
+            System.arraycopy(embedding, 0, normalized, 0, embedding.length);
+            return normalized;
+        }
+        for (int i = 0; i < embedding.length; i++) normalized[i] = embedding[i] / norm;
+        return normalized;
+    }
+
     private float[] applyEmapTransformation(float[] embedding) {
         if (emap == null || emap.length != embedding.length) {
-            Log.w(TAG, "Emap not properly initialized, using original embedding");
-            return embedding;
+            return l2Normalize(embedding);
         }
-        
-        // Matrix multiplication: result = embedding * emap
         float[] result = new float[embedding.length];
         for (int i = 0; i < embedding.length; i++) {
             float sum = 0.0f;
@@ -253,78 +273,53 @@ public class FaceSwapper {
             }
             result[i] = sum;
         }
-        
-        // L2 normalize the result
-        float norm = 0.0f;
-        for (float value : result) {
-            norm += value * value;
-        }
-        norm = (float) Math.sqrt(norm);
-        
-        if (norm > 0) {
-            for (int i = 0; i < result.length; i++) {
-                result[i] /= norm;
+        return l2Normalize(result);
+    }
+
+    private float[][] loadEmapFromAssets() throws IOException {
+        try (InputStream input = context.getAssets().open("emap.bin")) {
+            byte[] header = new byte[8];
+            if (input.read(header) != 8) throw new IOException("Failed to read EMAP header");
+            ByteBuffer headerBuffer = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
+            int rows = headerBuffer.getInt();
+            int cols = headerBuffer.getInt();
+            if (rows != 512 || cols != 512) {
+                throw new IOException("Invalid EMAP dimensions: " + rows + "x" + cols);
             }
-        }
-        
-        return result;
-    }
 
-    private float[] bitmapToFloatArray(Bitmap bitmap) {
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        int[] pixels = new int[width * height];
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
-
-        float[] output = new float[3 * width * height];
-        
-        // CRITICAL FIX: INSwapper uses input_std = 255.0, NOT 127.5
-        // Python code: self.input_std = 255.0 (line 20 in inswapper.py)
-        // Normalization: (pixel - 0.0) / 255.0 = pixel / 255.0
-        for (int i = 0; i < pixels.length; i++) {
-            int pixel = pixels[i];
-            int r = (pixel >> 16) & 0xFF;
-            int g = (pixel >> 8) & 0xFF;
-            int b = pixel & 0xFF;
-
-            output[i] = r / 255.0f;
-            output[pixels.length + i] = g / 255.0f;
-            output[2 * pixels.length + i] = b / 255.0f;
-        }
-
-        return output;
-    }
-
-    private Bitmap floatArrayToBitmap(float[][][] data) {
-        int height = data[0].length;
-        int width = data[0][0].length;
-        
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        int[] pixels = new int[width * height];
-
-        // CRITICAL FIX: Denormalize with 255.0, matching Python code
-        // Python: bgr_fake = np.clip(255 * img_fake, 0, 255).astype(np.uint8)
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int r = (int) Math.max(0, Math.min(255, data[0][y][x] * 255.0f));
-                int g = (int) Math.max(0, Math.min(255, data[1][y][x] * 255.0f));
-                int b = (int) Math.max(0, Math.min(255, data[2][y][x] * 255.0f));
-                
-                pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            byte[] bytes = new byte[rows * cols * 4];
+            int total = 0;
+            while (total < bytes.length) {
+                int read = input.read(bytes, total, bytes.length - total);
+                if (read < 0) throw new IOException("Unexpected EOF reading EMAP");
+                total += read;
             }
-        }
 
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
-        return bitmap;
+            ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+            float[][] matrix = new float[rows][cols];
+            for (int r = 0; r < rows; r++) {
+                for (int c = 0; c < cols; c++) matrix[r][c] = buffer.getFloat();
+            }
+            return matrix;
+        }
     }
 
-    public void close() {
+    private int clampToByte(float value) {
+        return Math.max(0, Math.min(255, Math.round(value)));
+    }
+
+    private void closeSessionOnly() {
         if (session != null) {
             try {
                 session.close();
             } catch (OrtException e) {
-                Log.e(TAG, "Error closing session", e);
+                Log.w(TAG, "Error closing ONNX session", e);
             }
+            session = null;
         }
+    }
+
+    public void close() {
+        closeSessionOnly();
     }
 }
