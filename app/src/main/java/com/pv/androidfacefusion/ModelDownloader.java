@@ -20,15 +20,13 @@ public class ModelDownloader {
 
     public static final String DET_MODEL = "det_10g.onnx";
     public static final String REC_MODEL = "arcface_w600k_r50.onnx";
-    public static final String HYPERSWAP_MODEL = "hyperswap_1b_256.onnx";
+    public static final String HYPERSWAP_MODEL = "hyperswap_1a_256.onnx";
     public static final String INSWAPPER_MODEL = "inswapper_128.onnx";
 
-    // Official FaceFusion model SHA-256 values. These stop a truncated/wrong cached
-    // model being accepted merely because it happens to be large enough.
     private static final String REC_MODEL_SHA256 =
         "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1";
     private static final String HYPERSWAP_MODEL_SHA256 =
-        "5124031789c42f71b9558fb71954ef7aedb6da7ed9fac79293e23c61a792a73e";
+        "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add";
 
     private static final List<String> DET_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/det_10g.onnx"
@@ -37,7 +35,7 @@ public class ModelDownloader {
         "https://huggingface.co/facefusion/models-3.0.0/resolve/main/arcface_w600k_r50.onnx?download=true"
     );
     private static final List<String> HYPERSWAP_MODEL_URLS = Arrays.asList(
-        "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1b_256.onnx?download=true"
+        "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1a_256.onnx?download=true"
     );
     private static final List<String> INSWAPPER_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/inswapper_128.onnx",
@@ -167,7 +165,8 @@ public class ModelDownloader {
     }
 
     public void clearCache() {
-        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL, "w600k_r50.onnx"}) {
+        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL,
+            "w600k_r50.onnx", "hyperswap_1b_256.onnx"}) {
             File file = new File(context.getFilesDir(), modelName);
             if (file.exists() && !file.delete()) Log.w(TAG, "Could not delete cached model: " + modelName);
         }
