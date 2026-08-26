@@ -16,10 +16,11 @@ import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.TensorInfo;
 
-/** HyperSwap 1b 256 implementation matching FaceFusion's model contract. */
+/** HyperSwap 1a 256 implementation matching FaceFusion's model contract. */
 public class FaceSwapper {
     private static final String TAG = "FaceSwapper";
     private static final int HYPERSWAP_SIZE = 256;
+    public static final int QUALITY_SIZE = 512;
 
     private final Context context;
     private final OrtEnvironment env;
@@ -34,17 +35,17 @@ public class FaceSwapper {
 
     public void initialize() throws Exception {
         ModelDownloader downloader = new ModelDownloader(context);
-        Log.i(TAG, "Loading HyperSwap 1b 256...");
+        Log.i(TAG, "Loading HyperSwap 1a 256...");
         File model = downloader.getModelFile(ModelDownloader.HYPERSWAP_MODEL);
 
         try {
             session = OrtSessionHelper.createSession(env, model.getAbsolutePath(), TAG);
             resolveInputNames();
             validateHyperSwapInputs();
-            Log.i(TAG, "HyperSwap 1b 256 initialized successfully: " + model.getAbsolutePath());
+            Log.i(TAG, "HyperSwap 1a 256 initialized successfully: " + model.getAbsolutePath());
         } catch (Exception e) {
             closeSessionOnly();
-            throw new Exception("HyperSwap 1b 256 failed to initialize: " + e.getMessage(), e);
+            throw new Exception("HyperSwap 1a 256 failed to initialize: " + e.getMessage(), e);
         }
     }
 
@@ -128,6 +129,82 @@ public class FaceSwapper {
         } finally {
             if (resizedTarget != targetFace && !resizedTarget.isRecycled()) resizedTarget.recycle();
         }
+    }
+
+    /**
+     * FaceFusion pixel boost at 512px. This is not a simple quadrant split: it uses the
+     * same interleaved reshape/transpose layout as FaceFusion's implode/explode helpers.
+     */
+    public Bitmap swapFace512(Bitmap targetFace512, float[] sourceEmbedding) throws OrtException {
+        Bitmap input = targetFace512;
+        if (targetFace512.getWidth() != QUALITY_SIZE || targetFace512.getHeight() != QUALITY_SIZE) {
+            input = Bitmap.createScaledBitmap(targetFace512, QUALITY_SIZE, QUALITY_SIZE, true);
+        }
+        Bitmap[] tiles = implodePixelBoost(input);
+        Bitmap[] swappedTiles = new Bitmap[4];
+        try {
+            for (int i = 0; i < 4; i++) {
+                swappedTiles[i] = swapFace(tiles[i], sourceEmbedding, input);
+            }
+            return explodePixelBoost(swappedTiles);
+        } finally {
+            for (Bitmap tile : tiles) {
+                if (tile != null && !tile.isRecycled()) tile.recycle();
+            }
+            for (Bitmap tile : swappedTiles) {
+                if (tile != null && !tile.isRecycled()) tile.recycle();
+            }
+            if (input != targetFace512 && !input.isRecycled()) input.recycle();
+        }
+    }
+
+    private Bitmap[] implodePixelBoost(Bitmap input) {
+        int[] source = new int[QUALITY_SIZE * QUALITY_SIZE];
+        input.getPixels(source, 0, QUALITY_SIZE, 0, 0, QUALITY_SIZE, QUALITY_SIZE);
+        Bitmap[] result = new Bitmap[4];
+        for (int offsetY = 0; offsetY < 2; offsetY++) {
+            for (int offsetX = 0; offsetX < 2; offsetX++) {
+                int[] pixels = new int[HYPERSWAP_SIZE * HYPERSWAP_SIZE];
+                for (int y = 0; y < HYPERSWAP_SIZE; y++) {
+                    int sourceY = y * 2 + offsetY;
+                    for (int x = 0; x < HYPERSWAP_SIZE; x++) {
+                        int sourceX = x * 2 + offsetX;
+                        pixels[y * HYPERSWAP_SIZE + x] = source[sourceY * QUALITY_SIZE + sourceX];
+                    }
+                }
+                int index = offsetY * 2 + offsetX;
+                Bitmap tile = Bitmap.createBitmap(HYPERSWAP_SIZE, HYPERSWAP_SIZE, Bitmap.Config.ARGB_8888);
+                tile.setPixels(pixels, 0, HYPERSWAP_SIZE, 0, 0, HYPERSWAP_SIZE, HYPERSWAP_SIZE);
+                result[index] = tile;
+            }
+        }
+        return result;
+    }
+
+    private Bitmap explodePixelBoost(Bitmap[] tiles) {
+        int[][] tilePixels = new int[4][];
+        for (int i = 0; i < 4; i++) {
+            tilePixels[i] = new int[HYPERSWAP_SIZE * HYPERSWAP_SIZE];
+            tiles[i].getPixels(tilePixels[i], 0, HYPERSWAP_SIZE, 0, 0,
+                HYPERSWAP_SIZE, HYPERSWAP_SIZE);
+        }
+        int[] output = new int[QUALITY_SIZE * QUALITY_SIZE];
+        for (int offsetY = 0; offsetY < 2; offsetY++) {
+            for (int offsetX = 0; offsetX < 2; offsetX++) {
+                int index = offsetY * 2 + offsetX;
+                int[] pixels = tilePixels[index];
+                for (int y = 0; y < HYPERSWAP_SIZE; y++) {
+                    int outputY = y * 2 + offsetY;
+                    for (int x = 0; x < HYPERSWAP_SIZE; x++) {
+                        int outputX = x * 2 + offsetX;
+                        output[outputY * QUALITY_SIZE + outputX] = pixels[y * HYPERSWAP_SIZE + x];
+                    }
+                }
+            }
+        }
+        Bitmap result = Bitmap.createBitmap(QUALITY_SIZE, QUALITY_SIZE, Bitmap.Config.ARGB_8888);
+        result.setPixels(output, 0, QUALITY_SIZE, 0, 0, QUALITY_SIZE, QUALITY_SIZE);
+        return result;
     }
 
     private float[] bitmapToHyperSwapArray(Bitmap bitmap) {
