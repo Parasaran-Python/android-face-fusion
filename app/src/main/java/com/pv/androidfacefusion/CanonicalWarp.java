@@ -11,16 +11,19 @@ import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
-/** Reprojects already aligned face crops between FaceFusion canonical templates. */
+/** Reprojects already aligned face crops between the app's canonical HyperSwap space and SimSwap. */
 public final class CanonicalWarp {
     private static volatile boolean openCvReady;
 
-    private static final float[][] HYPERSWAP_ARCFACE_128 = {
-        {0.36167656f, 0.40387734f},
-        {0.63696719f, 0.40235469f},
-        {0.50019687f, 0.56044219f},
-        {0.38710391f, 0.72160547f},
-        {0.61507734f, 0.72034453f}
+    // Keep this exactly in sync with SwapperImageUtils.HYPERSWAP_256_NORMALIZED. The whole
+    // compositor is built around this proven Android canonical space, so alternative swappers
+    // are reprojected into it instead of silently migrating the existing alignment contract.
+    private static final float[][] HYPERSWAP_CANONICAL = {
+        {84.87f / 256.0f, 105.94f / 256.0f},
+        {171.13f / 256.0f, 105.94f / 256.0f},
+        {128.00f / 256.0f, 146.66f / 256.0f},
+        {96.95f / 256.0f, 188.64f / 256.0f},
+        {159.05f / 256.0f, 188.64f / 256.0f}
     };
 
     private static final float[][] SIMSWAP_ARCFACE_112_V1 = {
@@ -34,13 +37,13 @@ public final class CanonicalWarp {
     private CanonicalWarp() {}
 
     public static Bitmap hyperSwapToSimSwap(Bitmap hyperSwapAligned, int simSwapSize) {
-        return warpBetweenTemplates(hyperSwapAligned, HYPERSWAP_ARCFACE_128,
+        return warpBetweenTemplates(hyperSwapAligned, HYPERSWAP_CANONICAL,
             SIMSWAP_ARCFACE_112_V1, simSwapSize);
     }
 
     public static Bitmap simSwapToHyperSwap(Bitmap simSwapAligned, int hyperSwapSize) {
         return warpBetweenTemplates(simSwapAligned, SIMSWAP_ARCFACE_112_V1,
-            HYPERSWAP_ARCFACE_128, hyperSwapSize);
+            HYPERSWAP_CANONICAL, hyperSwapSize);
     }
 
     private static Bitmap warpBetweenTemplates(Bitmap sourceBitmap, float[][] sourceTemplate,
