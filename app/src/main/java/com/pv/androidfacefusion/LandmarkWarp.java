@@ -2,12 +2,12 @@ package com.pv.androidfacefusion;
 
 /** Lightweight landmark transform helpers using the same HyperSwap canonical template as paste-back. */
 public final class LandmarkWarp {
-    private static final float[][] HYPERSWAP_ARCFACE_128 = {
-        {0.36167656f, 0.40387734f},
-        {0.63696719f, 0.40235469f},
-        {0.50019687f, 0.56044219f},
-        {0.38710391f, 0.72160547f},
-        {0.61507734f, 0.72034453f}
+    private static final float[][] HYPERSWAP_CANONICAL = {
+        {84.87f / 256.0f, 105.94f / 256.0f},
+        {171.13f / 256.0f, 105.94f / 256.0f},
+        {128.00f / 256.0f, 146.66f / 256.0f},
+        {96.95f / 256.0f, 188.64f / 256.0f},
+        {159.05f / 256.0f, 188.64f / 256.0f}
     };
 
     private LandmarkWarp() {}
@@ -21,8 +21,8 @@ public final class LandmarkWarp {
         for (int i = 0; i < 5; i++) {
             src[i][0] = landmarks5[i * 2];
             src[i][1] = landmarks5[i * 2 + 1];
-            dst[i][0] = HYPERSWAP_ARCFACE_128[i][0] * size;
-            dst[i][1] = HYPERSWAP_ARCFACE_128[i][1] * size;
+            dst[i][0] = HYPERSWAP_CANONICAL[i][0] * size;
+            dst[i][1] = HYPERSWAP_CANONICAL[i][1] * size;
         }
         double[] m = estimateSimilarity(src, dst);
         float[] result = new float[136];
