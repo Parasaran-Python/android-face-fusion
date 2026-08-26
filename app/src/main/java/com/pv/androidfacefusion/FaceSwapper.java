@@ -28,6 +28,7 @@ public class FaceSwapper {
     private static final String TAG = "FaceSwapper";
     private static final int HYPERSWAP_SIZE = 256;
     private static final int INSWAPPER_SIZE = 128;
+    private static final double HYPERSWAP_MIN_MEAN_PIXEL_DELTA = 1.0;
 
     private enum Backend {
         HYPERSWAP,
@@ -164,9 +165,22 @@ public class FaceSwapper {
 
             try (OrtSession.Result results = session.run(inputs)) {
                 float[][][][] output = (float[][][][]) results.get(0).getValue();
-                return backend == Backend.HYPERSWAP
+                Bitmap swapped = backend == Backend.HYPERSWAP
                     ? hyperSwapOutputToBitmap(output[0])
                     : inSwapperOutputToBitmap(output[0]);
+
+                if (backend == Backend.HYPERSWAP) {
+                    double meanDelta = calculateMeanPixelDelta(resizedTarget, swapped);
+                    Log.i(TAG, "HyperSwap output mean pixel delta=" + meanDelta);
+                    if (meanDelta < HYPERSWAP_MIN_MEAN_PIXEL_DELTA) {
+                        swapped.recycle();
+                        throw new IllegalStateException(
+                            "HyperSwap produced effectively unchanged output (mean pixel delta="
+                                + meanDelta + ")");
+                    }
+                }
+
+                return swapped;
             }
         } finally {
             if (resizedTarget != targetFace && !resizedTarget.isRecycled()) {
@@ -217,7 +231,7 @@ public class FaceSwapper {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         int[] pixels = new int[width * height];
 
-        // HyperSwap output is tanh-like; reverse mean/std normalization.
+        // HyperSwap output is normalized with mean/std 0.5; reverse it to RGB [0,255].
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int r = clampToByte((data[0][y][x] * 0.5f + 0.5f) * 255.0f);
@@ -246,6 +260,26 @@ public class FaceSwapper {
         }
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
         return bitmap;
+    }
+
+    private double calculateMeanPixelDelta(Bitmap a, Bitmap b) {
+        if (a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight()) {
+            return Double.POSITIVE_INFINITY;
+        }
+
+        int count = a.getWidth() * a.getHeight();
+        int[] aPixels = new int[count];
+        int[] bPixels = new int[count];
+        a.getPixels(aPixels, 0, a.getWidth(), 0, 0, a.getWidth(), a.getHeight());
+        b.getPixels(bPixels, 0, b.getWidth(), 0, 0, b.getWidth(), b.getHeight());
+
+        long delta = 0L;
+        for (int i = 0; i < count; i++) {
+            delta += Math.abs(((aPixels[i] >> 16) & 0xFF) - ((bPixels[i] >> 16) & 0xFF));
+            delta += Math.abs(((aPixels[i] >> 8) & 0xFF) - ((bPixels[i] >> 8) & 0xFF));
+            delta += Math.abs((aPixels[i] & 0xFF) - (bPixels[i] & 0xFF));
+        }
+        return delta / (double) (count * 3L);
     }
 
     private float[] l2Normalize(float[] embedding) {
