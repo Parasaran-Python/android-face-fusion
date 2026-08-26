@@ -7,17 +7,19 @@ import android.graphics.Paint;
 
 /**
  * Alignment and paste-back helpers for 256px face swappers such as HyperSwap.
- * Uses FaceFusion's normalized arcface_128 five-point landmark template.
+ * Uses the 256px landmark geometry used by a known working HyperSwap CPU implementation.
  */
 public final class SwapperImageUtils {
     private SwapperImageUtils() {}
 
-    private static final float[][] ARCFACE_128_NORMALIZED = {
-        {0.36167656f, 0.40387734f},
-        {0.63696719f, 0.40235469f},
-        {0.50019687f, 0.56044219f},
-        {0.38710391f, 0.72160547f},
-        {0.61507734f, 0.72034453f}
+    // HyperSwap 256 reference points from the working ReActor implementation.
+    // Stored normalized so alignment/paste-back stay consistent if size changes.
+    private static final float[][] HYPERSWAP_256_NORMALIZED = {
+        {84.87f / 256.0f, 105.94f / 256.0f},
+        {171.13f / 256.0f, 105.94f / 256.0f},
+        {128.00f / 256.0f, 146.66f / 256.0f},
+        {96.95f / 256.0f, 188.64f / 256.0f},
+        {159.05f / 256.0f, 188.64f / 256.0f}
     };
 
     public static Bitmap alignFace(Bitmap image, float[] landmarks, int targetSize) {
@@ -110,7 +112,6 @@ public final class SwapperImageUtils {
                 float edge = Math.min(Math.min(x, size - 1 - x), Math.min(y, size - 1 - y));
                 float alpha = (edge - hardInset) / feather;
                 alpha = Math.max(0.0f, Math.min(1.0f, alpha));
-                // Smoothstep for less visible paste edges.
                 alpha = alpha * alpha * (3.0f - 2.0f * alpha);
                 int a = clamp(Math.round(alpha * 255.0f));
                 pixels[y * size + x] = (a << 24) | 0x00FFFFFF;
@@ -132,8 +133,8 @@ public final class SwapperImageUtils {
     private static float[][] scaledTemplate(int size) {
         float[][] result = new float[5][2];
         for (int i = 0; i < 5; i++) {
-            result[i][0] = ARCFACE_128_NORMALIZED[i][0] * size;
-            result[i][1] = ARCFACE_128_NORMALIZED[i][1] * size;
+            result[i][0] = HYPERSWAP_256_NORMALIZED[i][0] * size;
+            result[i][1] = HYPERSWAP_256_NORMALIZED[i][1] * size;
         }
         return result;
     }
