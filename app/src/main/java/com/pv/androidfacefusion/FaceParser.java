@@ -68,7 +68,7 @@ public final class FaceParser {
                                 bestClass = c;
                             }
                         }
-                        mask[y * width + x] = isFaceRegion(bestClass) ? 1.0f : 0.0f;
+                        mask[y * width + x] = isSwapRegion(bestClass) ? 1.0f : 0.0f;
                     }
                 }
                 if (width == INPUT_SIZE && height == INPUT_SIZE) return mask;
@@ -82,10 +82,12 @@ public final class FaceParser {
         }
     }
 
-    private boolean isFaceRegion(int label) {
-        // FaceFusion region set: skin, eyebrows, eyes, nose, mouth and lips.
-        // Deliberately exclude hair/background; also preserve target glasses instead of repainting them.
-        return label == 1 || label == 2 || label == 3 || label == 4 || label == 5
+    private boolean isSwapRegion(int label) {
+        // Swap facial skin/features while preserving the target eye interiors, glasses,
+        // hair and background. BiSeNet labels 4/5 are the left/right eye regions.
+        // Leaving those regions out keeps the original gaze, iris/sclera detail and
+        // tiny eyelash edges; the surrounding eyelid skin still swaps through label 1.
+        return label == 1 || label == 2 || label == 3
             || label == 10 || label == 11 || label == 12 || label == 13;
     }
 
