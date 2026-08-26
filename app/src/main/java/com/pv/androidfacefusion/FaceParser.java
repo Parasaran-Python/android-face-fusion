@@ -91,18 +91,20 @@ public final class FaceParser {
     }
 
     /**
-     * Base semantic identity weights. Probability mixing and bilinear resizing soften these
-     * values at real class boundaries instead of producing a binary face-shaped cut-out.
+     * Base semantic identity weights. Brows now favour the generated face so the target brow
+     * is actually overwritten instead of surviving underneath as a second visible eyebrow.
+     * Eyes and mouth cavity remain target-led because gaze, blinking and teeth are expression cues.
      */
     private float regionBlendWeight(int label) {
         switch (label) {
             case 1:  // skin
-            case 2:  // left brow
-            case 3:  // right brow
             case 10: // nose
             case 12: // upper lip
             case 13: // lower lip
                 return 1.0f;
+            case 2:  // left brow
+            case 3:  // right brow
+                return 0.72f;
             case 4:  // left eye
             case 5:  // right eye
                 return 0.20f;
