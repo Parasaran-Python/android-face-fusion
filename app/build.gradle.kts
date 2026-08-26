@@ -12,11 +12,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.fodel2.androidfacefusiontest"
+        applicationId = "com.fodel2.ff3"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0-test"
+        versionName = "1.0-ff3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
