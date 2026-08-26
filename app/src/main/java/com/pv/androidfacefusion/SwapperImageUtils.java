@@ -154,6 +154,13 @@ public final class SwapperImageUtils {
     private static float[] createNaturalCropMask(int size, float[] semanticMask) {
         float[] mask = new float[size * size];
         boolean hasSemantic = semanticMask != null && semanticMask.length == mask.length;
+        if (hasSemantic) {
+            for (int i = 0; i < mask.length; i++) {
+                mask[i] = clamp01(semanticMask[i]);
+            }
+            return mask;
+        }
+
         double cx = (size - 1) * 0.5;
         double cy = (size - 1) * 0.5;
         double rx = size * 0.39;
@@ -162,9 +169,7 @@ public final class SwapperImageUtils {
             double dy = (y - cy) / ry;
             for (int x = 0; x < size; x++) {
                 double dx = (x - cx) / rx;
-                float oval = dx * dx + dy * dy <= 1.0 ? 1.0f : 0.0f;
-                int index = y * size + x;
-                mask[index] = hasSemantic ? clamp01(semanticMask[index]) * oval : oval;
+                mask[y * size + x] = dx * dx + dy * dy <= 1.0 ? 1.0f : 0.0f;
             }
         }
         return mask;
