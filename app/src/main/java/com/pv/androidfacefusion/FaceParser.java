@@ -37,8 +37,10 @@ public final class FaceParser {
 
     public float[] createMask(Bitmap alignedFace) {
         if (session == null || alignedFace == null) return null;
+        int outputWidth = alignedFace.getWidth();
+        int outputHeight = alignedFace.getHeight();
         Bitmap resized = alignedFace;
-        if (alignedFace.getWidth() != INPUT_SIZE || alignedFace.getHeight() != INPUT_SIZE) {
+        if (outputWidth != INPUT_SIZE || outputHeight != INPUT_SIZE) {
             resized = Bitmap.createScaledBitmap(alignedFace, INPUT_SIZE, INPUT_SIZE, true);
         }
         try {
@@ -68,11 +70,11 @@ public final class FaceParser {
                                 bestClass = c;
                             }
                         }
-                        mask[y * width + x] = isFaceRegion(bestClass) ? 1.0f : 0.0f;
+                        mask[y * width + x] = regionBlendWeight(bestClass);
                     }
                 }
-                if (width == INPUT_SIZE && height == INPUT_SIZE) return mask;
-                return resizeMaskNearest(mask, width, height, INPUT_SIZE, INPUT_SIZE);
+                if (width == outputWidth && height == outputHeight) return mask;
+                return resizeMaskNearest(mask, width, height, outputWidth, outputHeight);
             }
         } catch (Exception e) {
             Log.w(TAG, "Semantic face parsing failed; using geometric blend mask", e);
@@ -82,11 +84,28 @@ public final class FaceParser {
         }
     }
 
-    private boolean isFaceRegion(int label) {
-        // FaceFusion region set: skin, eyebrows, eyes, nose, mouth and lips.
-        // Deliberately exclude hair/background; also preserve target glasses instead of repainting them.
-        return label == 1 || label == 2 || label == 3 || label == 4 || label == 5
-            || label == 10 || label == 11 || label == 12 || label == 13;
+    /**
+     * Graduated semantic blending instead of binary cut-outs. Skin/brows/nose/lips carry
+     * identity strongly, while the target's gaze and mouth interior remain dominant.
+     */
+    private float regionBlendWeight(int label) {
+        switch (label) {
+            case 1:  // skin
+            case 2:  // left brow
+            case 3:  // right brow
+            case 10: // nose
+            case 12: // upper lip
+            case 13: // lower lip
+                return 1.0f;
+            case 4:  // left eye
+            case 5:  // right eye
+                return 0.14f;
+            case 11: // mouth cavity / teeth
+                return 0.08f;
+            default:
+                // Preserve target glasses, ears, neck, hair, hat, clothing and background.
+                return 0.0f;
+        }
     }
 
     private float[] bitmapToInput(Bitmap bitmap) {
