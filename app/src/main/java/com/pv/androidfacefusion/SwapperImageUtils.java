@@ -14,9 +14,7 @@ import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
-/**
- * OpenCV alignment and paste-back helpers used by the FaceFusion/HyperSwap path.
- */
+/** OpenCV alignment and paste-back helpers for the FaceFusion/HyperSwap path. */
 public final class SwapperImageUtils {
     private static volatile boolean openCvReady;
 
@@ -30,7 +28,6 @@ public final class SwapperImageUtils {
         {159.05f / 256.0f, 188.64f / 256.0f}
     };
 
-    // FaceFusion recognizer template: arcface_112_v2.
     private static final float[][] ARCFACE_112_V2_NORMALIZED = {
         {0.34191607f, 0.46157411f},
         {0.65653393f, 0.45983393f},
@@ -43,22 +40,15 @@ public final class SwapperImageUtils {
         if (landmarks == null || landmarks.length < 10) {
             return Bitmap.createScaledBitmap(image, 112, 112, true);
         }
-
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(ARCFACE_112_V2_NORMALIZED, 112));
+        Mat affine = estimateAffineTransform(
+            unpackLandmarks(landmarks), scaledTemplate(ARCFACE_112_V2_NORMALIZED, 112), 100.0);
         Mat source = new Mat();
         Mat aligned = new Mat();
         try {
             Utils.bitmapToMat(image, source);
-            Imgproc.warpAffine(
-                source,
-                aligned,
-                affine,
-                new Size(112, 112),
-                Imgproc.INTER_AREA,
-                Core.BORDER_REPLICATE,
-                new Scalar(0, 0, 0, 255));
-
+            Imgproc.warpAffine(source, aligned, affine, new Size(112, 112), Imgproc.INTER_AREA,
+                Core.BORDER_REPLICATE, new Scalar(0, 0, 0, 255));
             Bitmap result = Bitmap.createBitmap(112, 112, Bitmap.Config.ARGB_8888);
             Utils.matToBitmap(aligned, result);
             return result;
@@ -73,22 +63,15 @@ public final class SwapperImageUtils {
         if (landmarks == null || landmarks.length < 10) {
             return Bitmap.createScaledBitmap(image, targetSize, targetSize, true);
         }
-
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, targetSize));
+        Mat affine = estimateAffineTransform(
+            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, targetSize), 3.0);
         Mat source = new Mat();
         Mat aligned = new Mat();
         try {
             Utils.bitmapToMat(image, source);
-            Imgproc.warpAffine(
-                source,
-                aligned,
-                affine,
-                new Size(targetSize, targetSize),
-                Imgproc.INTER_CUBIC,
-                Core.BORDER_REFLECT,
-                new Scalar(0, 0, 0, 255));
-
+            Imgproc.warpAffine(source, aligned, affine, new Size(targetSize, targetSize), Imgproc.INTER_CUBIC,
+                Core.BORDER_REFLECT, new Scalar(0, 0, 0, 255));
             Bitmap result = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888);
             Utils.matToBitmap(aligned, result);
             return result;
@@ -103,53 +86,29 @@ public final class SwapperImageUtils {
         if (landmarks == null || landmarks.length < 10) {
             return targetImage.copy(Bitmap.Config.ARGB_8888, true);
         }
-
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize));
-
+        Mat affine = estimateAffineTransform(
+            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize), 3.0);
         int width = targetImage.getWidth();
         int height = targetImage.getHeight();
-
         Mat inverse = new Mat();
         Mat swappedMat = new Mat();
         Mat warpedFaceMat = new Mat();
         Mat cropMask = Mat.zeros(faceSize, faceSize, CvType.CV_32FC1);
         Mat warpedMask = new Mat();
-
         try {
             Imgproc.invertAffineTransform(affine, inverse);
             Utils.bitmapToMat(swappedFace, swappedMat);
+            Imgproc.warpAffine(swappedMat, warpedFaceMat, inverse, new Size(width, height),
+                Imgproc.INTER_LANCZOS4, Core.BORDER_CONSTANT, new Scalar(127.5, 127.5, 127.5, 255));
 
-            Imgproc.warpAffine(
-                swappedMat,
-                warpedFaceMat,
-                inverse,
-                new Size(width, height),
-                Imgproc.INTER_LANCZOS4,
-                Core.BORDER_CONSTANT,
-                new Scalar(127.5, 127.5, 127.5, 255));
-
-            Imgproc.ellipse(
-                cropMask,
-                new Point(faceSize / 2.0, faceSize / 2.0),
-                new Size(faceSize * 0.35, faceSize * 0.40),
-                0.0,
-                0.0,
-                360.0,
-                new Scalar(1.0),
-                -1);
+            Imgproc.ellipse(cropMask, new Point(faceSize / 2.0, faceSize / 2.0),
+                new Size(faceSize * 0.35, faceSize * 0.40), 0.0, 0.0, 360.0,
+                new Scalar(1.0), -1);
             Imgproc.GaussianBlur(cropMask, cropMask, new Size(15, 15), 0.0);
-
-            Imgproc.warpAffine(
-                cropMask,
-                warpedMask,
-                inverse,
-                new Size(width, height),
-                Imgproc.INTER_CUBIC,
-                Core.BORDER_CONSTANT,
-                new Scalar(0.0));
+            Imgproc.warpAffine(cropMask, warpedMask, inverse, new Size(width, height),
+                Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, new Scalar(0.0));
             Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(3, 3), 0.0);
-
             Core.max(warpedMask, new Scalar(0.0), warpedMask);
             Core.min(warpedMask, new Scalar(1.0), warpedMask);
 
@@ -174,39 +133,32 @@ public final class SwapperImageUtils {
         int width = target.getWidth();
         int height = target.getHeight();
         int count = width * height;
-
         int[] targetPixels = new int[count];
         int[] facePixels = new int[count];
         int[] resultPixels = new int[count];
         float[] maskValues = new float[count];
-
         target.getPixels(targetPixels, 0, width, 0, 0, width, height);
         face.getPixels(facePixels, 0, width, 0, 0, width, height);
         mask.get(0, 0, maskValues);
-
         for (int i = 0; i < count; i++) {
             float alpha = Math.max(0.0f, Math.min(1.0f, maskValues[i]));
             if (alpha <= 0.0001f) {
                 resultPixels[i] = targetPixels[i];
                 continue;
             }
-
             int targetPixel = targetPixels[i];
             int facePixel = facePixels[i];
-
             int tr = (targetPixel >> 16) & 0xFF;
             int tg = (targetPixel >> 8) & 0xFF;
             int tb = targetPixel & 0xFF;
             int fr = (facePixel >> 16) & 0xFF;
             int fg = (facePixel >> 8) & 0xFF;
             int fb = facePixel & 0xFF;
-
             int r = clamp(Math.round(tr * (1.0f - alpha) + fr * alpha));
             int g = clamp(Math.round(tg * (1.0f - alpha) + fg * alpha));
             int b = clamp(Math.round(tb * (1.0f - alpha) + fb * alpha));
             resultPixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
-
         Bitmap result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         result.setPixels(resultPixels, 0, width, 0, 0, width, height);
         return result;
@@ -223,24 +175,26 @@ public final class SwapperImageUtils {
         }
     }
 
-    private static Mat estimateAffineTransform(float[][] src, float[][] dst) {
+    private static Mat estimateAffineTransform(float[][] src, float[][] dst, double ransacThreshold) {
         Point[] srcPoints = new Point[src.length];
         Point[] dstPoints = new Point[dst.length];
         for (int i = 0; i < src.length; i++) {
             srcPoints[i] = new Point(src[i][0], src[i][1]);
             dstPoints[i] = new Point(dst[i][0], dst[i][1]);
         }
-
         MatOfPoint2f srcMat = new MatOfPoint2f(srcPoints);
         MatOfPoint2f dstMat = new MatOfPoint2f(dstPoints);
+        Mat inliers = new Mat();
         try {
-            Mat affine = Calib3d.estimateAffinePartial2D(srcMat, dstMat);
+            Mat affine = Calib3d.estimateAffinePartial2D(
+                srcMat, dstMat, inliers, Calib3d.RANSAC, ransacThreshold);
             if (affine == null || affine.empty() || affine.rows() != 2 || affine.cols() != 3) {
                 if (affine != null) affine.release();
                 throw new IllegalArgumentException("Could not estimate face affine transform");
             }
             return affine;
         } finally {
+            inliers.release();
             srcMat.release();
             dstMat.release();
         }
