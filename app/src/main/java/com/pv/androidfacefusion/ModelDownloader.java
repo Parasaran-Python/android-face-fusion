@@ -21,6 +21,9 @@ public class ModelDownloader {
     public static final String DET_MODEL = "det_10g.onnx";
     public static final String REC_MODEL = "arcface_w600k_r50.onnx";
     public static final String HYPERSWAP_MODEL = "hyperswap_1a_256.onnx";
+    public static final String HYPERSWAP_1C_MODEL = "hyperswap_1c_256.onnx";
+    public static final String SIMSWAP_512_MODEL = "simswap_unofficial_512.onnx";
+    public static final String CROSSFACE_SIMSWAP_MODEL = "crossface_simswap.onnx";
     public static final String LANDMARKER_MODEL = "2dfan4.onnx";
     public static final String PARSER_MODEL = "bisenet_resnet_18.onnx";
     public static final String INSWAPPER_MODEL = "inswapper_128.onnx";
@@ -29,6 +32,12 @@ public class ModelDownloader {
         "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1";
     private static final String HYPERSWAP_MODEL_SHA256 =
         "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add";
+    private static final String HYPERSWAP_1C_MODEL_SHA256 =
+        "5528c2d76fe9986c99d829278987ef9f3a630cb606db7628d02b57b330f406a5";
+    private static final String SIMSWAP_512_MODEL_SHA256 =
+        "fe805d1ce7d9e66322e2a8811f593a821e7d92f9ff861dd233794bdb2bb7a586";
+    private static final String CROSSFACE_SIMSWAP_MODEL_SHA256 =
+        "6452a261ec30cc30afdbe4a426d82c3b10a476f2df794e3494071c02574e6829";
     private static final String LANDMARKER_MODEL_SHA256 =
         "678c6fa539d52335a31c980feefdf4a6e02d781d83dce00af8a894f114557285";
     private static final String PARSER_MODEL_SHA256 =
@@ -42,6 +51,15 @@ public class ModelDownloader {
     );
     private static final List<String> HYPERSWAP_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1a_256.onnx?download=true"
+    );
+    private static final List<String> HYPERSWAP_1C_MODEL_URLS = Arrays.asList(
+        "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1c_256.onnx?download=true"
+    );
+    private static final List<String> SIMSWAP_512_MODEL_URLS = Arrays.asList(
+        "https://huggingface.co/facefusion/models-3.0.0/resolve/main/simswap_unofficial_512.onnx?download=true"
+    );
+    private static final List<String> CROSSFACE_SIMSWAP_MODEL_URLS = Arrays.asList(
+        "https://huggingface.co/facefusion/models-3.4.0/resolve/main/crossface_simswap.onnx?download=true"
     );
     private static final List<String> LANDMARKER_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/facefusion/models-3.0.0/resolve/main/2dfan4.onnx?download=true"
@@ -109,6 +127,15 @@ public class ModelDownloader {
             + (lastException != null ? lastException.getMessage() : "Unknown error"));
     }
 
+    public boolean isModelReady(String modelName) {
+        try {
+            return isModelDownloaded(modelName);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not validate " + modelName, e);
+            return false;
+        }
+    }
+
     private boolean validateKnownHash(String modelName, File file) throws Exception {
         String expected = getExpectedSha256(modelName);
         if (expected == null) return file.length() >= getMinExpectedSize(modelName);
@@ -122,6 +149,9 @@ public class ModelDownloader {
         switch (modelName) {
             case REC_MODEL: return REC_MODEL_SHA256;
             case HYPERSWAP_MODEL: return HYPERSWAP_MODEL_SHA256;
+            case HYPERSWAP_1C_MODEL: return HYPERSWAP_1C_MODEL_SHA256;
+            case SIMSWAP_512_MODEL: return SIMSWAP_512_MODEL_SHA256;
+            case CROSSFACE_SIMSWAP_MODEL: return CROSSFACE_SIMSWAP_MODEL_SHA256;
             case LANDMARKER_MODEL: return LANDMARKER_MODEL_SHA256;
             case PARSER_MODEL: return PARSER_MODEL_SHA256;
             default: return null;
@@ -145,7 +175,10 @@ public class ModelDownloader {
         switch (modelName) {
             case DET_MODEL: return 10 * 1024 * 1024L;
             case REC_MODEL: return 160 * 1024 * 1024L;
-            case HYPERSWAP_MODEL: return 380 * 1024 * 1024L;
+            case HYPERSWAP_MODEL:
+            case HYPERSWAP_1C_MODEL: return 380 * 1024 * 1024L;
+            case SIMSWAP_512_MODEL: return 220 * 1024 * 1024L;
+            case CROSSFACE_SIMSWAP_MODEL: return 20 * 1024 * 1024L;
             case LANDMARKER_MODEL: return 90 * 1024 * 1024L;
             case PARSER_MODEL: return 50 * 1024 * 1024L;
             case INSWAPPER_MODEL: return 500 * 1024 * 1024L;
@@ -153,12 +186,19 @@ public class ModelDownloader {
         }
     }
 
-    /** Base models required before the UI becomes usable. Quality models load lazily on first swap. */
+    /** Models required for the currently selected swapper to be immediately usable. */
     public boolean areAllModelsDownloaded() {
         try {
-            return isModelDownloaded(DET_MODEL)
-                && isModelDownloaded(REC_MODEL)
-                && isModelDownloaded(HYPERSWAP_MODEL);
+            if (!isModelDownloaded(DET_MODEL) || !isModelDownloaded(REC_MODEL)) return false;
+            FaceSwapper.ModelChoice choice = FaceSwapper.getSelectedModel(context);
+            if (choice == FaceSwapper.ModelChoice.HYPERSWAP_1C) {
+                return isModelDownloaded(HYPERSWAP_1C_MODEL);
+            }
+            if (choice == FaceSwapper.ModelChoice.SIMSWAP_512) {
+                return isModelDownloaded(SIMSWAP_512_MODEL)
+                    && isModelDownloaded(CROSSFACE_SIMSWAP_MODEL);
+            }
+            return isModelDownloaded(HYPERSWAP_MODEL);
         } catch (Exception e) {
             Log.w(TAG, "Model integrity check failed", e);
             return false;
@@ -175,6 +215,7 @@ public class ModelDownloader {
     public long getTotalModelSize() {
         long total = 0L;
         for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL,
+            HYPERSWAP_1C_MODEL, SIMSWAP_512_MODEL, CROSSFACE_SIMSWAP_MODEL,
             LANDMARKER_MODEL, PARSER_MODEL, INSWAPPER_MODEL}) {
             File file = new File(context.getFilesDir(), modelName);
             if (file.exists()) total += file.length();
@@ -184,8 +225,9 @@ public class ModelDownloader {
 
     public void clearCache() {
         for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL,
+            HYPERSWAP_1C_MODEL, SIMSWAP_512_MODEL, CROSSFACE_SIMSWAP_MODEL,
             LANDMARKER_MODEL, PARSER_MODEL, INSWAPPER_MODEL,
-            "w600k_r50.onnx", "hyperswap_1b_256.onnx"}) {
+            "w600k_r50.onnx", "hyperswap_1b_256.onnx", "arcface_converter_simswap.onnx"}) {
             File file = new File(context.getFilesDir(), modelName);
             if (file.exists() && !file.delete()) Log.w(TAG, "Could not delete cached model: " + modelName);
         }
@@ -196,6 +238,9 @@ public class ModelDownloader {
             case DET_MODEL: return DET_MODEL_URLS;
             case REC_MODEL: return REC_MODEL_URLS;
             case HYPERSWAP_MODEL: return HYPERSWAP_MODEL_URLS;
+            case HYPERSWAP_1C_MODEL: return HYPERSWAP_1C_MODEL_URLS;
+            case SIMSWAP_512_MODEL: return SIMSWAP_512_MODEL_URLS;
+            case CROSSFACE_SIMSWAP_MODEL: return CROSSFACE_SIMSWAP_MODEL_URLS;
             case LANDMARKER_MODEL: return LANDMARKER_MODEL_URLS;
             case PARSER_MODEL: return PARSER_MODEL_URLS;
             case INSWAPPER_MODEL: return INSWAPPER_MODEL_URLS;
