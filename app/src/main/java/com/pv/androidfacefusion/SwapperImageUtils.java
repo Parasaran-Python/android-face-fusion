@@ -7,9 +7,14 @@ import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint;
+import org.opencv.core.Point;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** OpenCV alignment and paste-back helpers for the FaceFusion/HyperSwap path. */
 public final class SwapperImageUtils {
@@ -80,23 +85,24 @@ public final class SwapperImageUtils {
     }
 
     public static Bitmap blendFace(Bitmap targetImage, Bitmap swappedFace, float[] landmarks, int faceSize) {
-        return blendFace(targetImage, null, swappedFace, landmarks, faceSize, null);
+        return blendFace(targetImage, null, swappedFace, landmarks, null, faceSize, null);
     }
 
-    /**
-     * Natural high-resolution paste-back. The semantic mask preserves hair/background while
-     * colour matching adapts the swapped skin to the target lighting. Only the affected ROI
-     * is warped, so full-resolution target images do not require full-frame temporary masks.
-     */
     public static Bitmap blendFace(Bitmap targetImage, Bitmap alignedTarget, Bitmap swappedFace,
                                    float[] landmarks, int faceSize, float[] semanticMask) {
-        if (landmarks == null || landmarks.length < 10) {
+        return blendFace(targetImage, alignedTarget, swappedFace, landmarks, null, faceSize, semanticMask);
+    }
+
+    /** Natural high-resolution paste-back with semantic and 68-point pose-aware boundaries. */
+    public static Bitmap blendFace(Bitmap targetImage, Bitmap alignedTarget, Bitmap swappedFace,
+                                   float[] landmarks5, float[] landmarks68, int faceSize, float[] semanticMask) {
+        if (landmarks5 == null || landmarks5.length < 10) {
             return targetImage.copy(Bitmap.Config.ARGB_8888, true);
         }
         ensureOpenCv();
 
         Mat affine = estimateSimilarityTransform(
-            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize));
+            unpackLandmarks(landmarks5), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize));
         Mat inverse = invertAffineTransform(affine);
         int[] roi = calculatePasteRoi(inverse, faceSize, targetImage.getWidth(), targetImage.getHeight());
         int roiWidth = roi[2] - roi[0];
@@ -107,7 +113,7 @@ public final class SwapperImageUtils {
             return targetImage.copy(Bitmap.Config.ARGB_8888, true);
         }
 
-        float[] cropMaskValues = createNaturalCropMask(faceSize, semanticMask);
+        float[] cropMaskValues = createNaturalCropMask(faceSize, semanticMask, affine, landmarks68);
         Bitmap correctedFace = alignedTarget != null
             ? matchColorAndLighting(alignedTarget, swappedFace, cropMaskValues)
             : swappedFace;
@@ -151,28 +157,75 @@ public final class SwapperImageUtils {
         }
     }
 
-    private static float[] createNaturalCropMask(int size, float[] semanticMask) {
+    private static float[] createNaturalCropMask(int size, float[] semanticMask,
+                                                  Mat affine, float[] landmarks68) {
         float[] mask = new float[size * size];
         boolean hasSemantic = semanticMask != null && semanticMask.length == mask.length;
         if (hasSemantic) {
-            for (int i = 0; i < mask.length; i++) {
-                mask[i] = clamp01(semanticMask[i]);
+            for (int i = 0; i < mask.length; i++) mask[i] = clamp01(semanticMask[i]);
+        } else {
+            double cx = (size - 1) * 0.5;
+            double cy = (size - 1) * 0.5;
+            double rx = size * 0.39;
+            double ry = size * 0.44;
+            for (int y = 0; y < size; y++) {
+                double dy = (y - cy) / ry;
+                for (int x = 0; x < size; x++) {
+                    double dx = (x - cx) / rx;
+                    mask[y * size + x] = dx * dx + dy * dy <= 1.0 ? 1.0f : 0.0f;
+                }
             }
-            return mask;
         }
 
-        double cx = (size - 1) * 0.5;
-        double cy = (size - 1) * 0.5;
-        double rx = size * 0.39;
-        double ry = size * 0.44;
-        for (int y = 0; y < size; y++) {
-            double dy = (y - cy) / ry;
-            for (int x = 0; x < size; x++) {
-                double dx = (x - cx) / rx;
-                mask[y * size + x] = dx * dx + dy * dy <= 1.0 ? 1.0f : 0.0f;
+        if (landmarks68 != null && landmarks68.length >= 136) {
+            float[] poseMask = createPoseContourMask(size, affine, landmarks68);
+            if (poseMask != null) {
+                for (int i = 0; i < mask.length; i++) mask[i] *= poseMask[i];
             }
         }
         return mask;
+    }
+
+    /**
+     * Build a soft face silhouette from the real jaw and brow geometry. The brow arc is
+     * lifted slightly to cover the forehead while BiSeNet remains responsible for excluding hair.
+     * This narrows the far cheek/temple naturally when the head is turned.
+     */
+    private static float[] createPoseContourMask(int size, Mat affine, float[] landmarks68) {
+        double[] a = new double[6];
+        affine.get(0, 0, a);
+        List<Point> polygon = new ArrayList<>();
+
+        for (int i = 0; i <= 16; i++) polygon.add(transformPoint(landmarks68, i, a));
+
+        double foreheadLift = size * 0.115;
+        for (int i = 26; i >= 17; i--) {
+            Point p = transformPoint(landmarks68, i, a);
+            polygon.add(new Point(p.x, p.y - foreheadLift));
+        }
+        if (polygon.size() < 3) return null;
+
+        Mat contourMask = Mat.zeros(size, size, CvType.CV_32FC1);
+        MatOfPoint contour = new MatOfPoint();
+        try {
+            contour.fromList(polygon);
+            Imgproc.fillConvexPoly(contourMask, contour, new Scalar(1.0));
+            Imgproc.GaussianBlur(contourMask, contourMask, new Size(0, 0), Math.max(2.0, size * 0.009));
+            Core.max(contourMask, new Scalar(0.0), contourMask);
+            Core.min(contourMask, new Scalar(1.0), contourMask);
+            float[] result = new float[size * size];
+            contourMask.get(0, 0, result);
+            return result;
+        } finally {
+            contour.release();
+            contourMask.release();
+        }
+    }
+
+    private static Point transformPoint(float[] points, int index, double[] a) {
+        double x = points[index * 2];
+        double y = points[index * 2 + 1];
+        return new Point(a[0] * x + a[1] * y + a[2], a[3] * x + a[4] * y + a[5]);
     }
 
     /** Conservative masked channel transfer: adapts broad skin tone/lighting while preserving detail. */
@@ -243,10 +296,7 @@ public final class SwapperImageUtils {
         int[] output = new int[count];
         for (int i = 0; i < count; i++) {
             int sp = swappedPixels[i];
-            int sr = (sp >> 16) & 0xFF;
-            int sg = (sp >> 8) & 0xFF;
-            int sb = sp & 0xFF;
-            int[] source = {sr, sg, sb};
+            int[] source = {(sp >> 16) & 0xFF, (sp >> 8) & 0xFF, sp & 0xFF};
             int[] corrected = new int[3];
             for (int c = 0; c < 3; c++) {
                 double mapped = (source[c] - swapMean[c]) * scale[c] + targetMean[c];
@@ -328,9 +378,7 @@ public final class SwapperImageUtils {
         if (openCvReady) return;
         synchronized (SwapperImageUtils.class) {
             if (openCvReady) return;
-            if (!OpenCVLoader.initLocal()) {
-                throw new IllegalStateException("OpenCV failed to initialize for face processing");
-            }
+            if (!OpenCVLoader.initLocal()) throw new IllegalStateException("OpenCV failed to initialize for face processing");
             openCvReady = true;
         }
     }
@@ -340,19 +388,11 @@ public final class SwapperImageUtils {
         int n = src.length;
         double srcCx = 0.0, srcCy = 0.0, dstCx = 0.0, dstCy = 0.0;
         for (int i = 0; i < n; i++) {
-            srcCx += src[i][0];
-            srcCy += src[i][1];
-            dstCx += dst[i][0];
-            dstCy += dst[i][1];
+            srcCx += src[i][0]; srcCy += src[i][1]; dstCx += dst[i][0]; dstCy += dst[i][1];
         }
-        srcCx /= n;
-        srcCy /= n;
-        dstCx /= n;
-        dstCy /= n;
+        srcCx /= n; srcCy /= n; dstCx /= n; dstCy /= n;
 
-        double srcNorm = 0.0;
-        double a = 0.0;
-        double b = 0.0;
+        double srcNorm = 0.0, a = 0.0, b = 0.0;
         for (int i = 0; i < n; i++) {
             double sx = src[i][0] - srcCx;
             double sy = src[i][1] - srcCy;
@@ -362,9 +402,7 @@ public final class SwapperImageUtils {
             a += sx * dx + sy * dy;
             b += sx * dy - sy * dx;
         }
-        if (srcNorm < 1e-10) {
-            throw new IllegalArgumentException("Invalid face landmarks for alignment");
-        }
+        if (srcNorm < 1e-10) throw new IllegalArgumentException("Invalid face landmarks for alignment");
 
         double m00 = a / srcNorm;
         double m01 = -b / srcNorm;
@@ -378,30 +416,18 @@ public final class SwapperImageUtils {
         return affine;
     }
 
-    /** Inverts a 2x3 affine matrix without relying on unavailable Android OpenCV APIs. */
+    /** Inverts a 2x3 affine matrix without unavailable Android OpenCV APIs. */
     private static Mat invertAffineTransform(Mat affine) {
         double[] values = new double[6];
         affine.get(0, 0, values);
-        double a = values[0];
-        double b = values[1];
-        double c = values[2];
-        double d = values[3];
-        double e = values[4];
-        double f = values[5];
+        double a = values[0], b = values[1], c = values[2], d = values[3], e = values[4], f = values[5];
         double det = a * e - b * d;
-        if (Math.abs(det) < 1e-12) {
-            throw new IllegalArgumentException("Face affine transform is not invertible");
-        }
-
-        double ia = e / det;
-        double ib = -b / det;
-        double id = -d / det;
-        double ie = a / det;
-        double ic = (b * f - e * c) / det;
-        double iff = (d * c - a * f) / det;
-
+        if (Math.abs(det) < 1e-12) throw new IllegalArgumentException("Face affine transform is not invertible");
         Mat inverse = new Mat(2, 3, CvType.CV_64FC1);
-        inverse.put(0, 0, new double[]{ia, ib, ic, id, ie, iff});
+        inverse.put(0, 0, new double[]{
+            e / det, -b / det, (b * f - e * c) / det,
+            -d / det, a / det, (d * c - a * f) / det
+        });
         return inverse;
     }
 
