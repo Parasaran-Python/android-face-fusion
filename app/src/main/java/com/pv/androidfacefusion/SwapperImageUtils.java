@@ -15,8 +15,7 @@ import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
 /**
- * HyperSwap 256 alignment and paste-back using the same geometry, affine
- * estimation, interpolation, border handling and soft oval mask as ReActor.
+ * OpenCV alignment and paste-back helpers used by the FaceFusion/HyperSwap path.
  */
 public final class SwapperImageUtils {
     private static volatile boolean openCvReady;
@@ -31,13 +30,52 @@ public final class SwapperImageUtils {
         {159.05f / 256.0f, 188.64f / 256.0f}
     };
 
+    // FaceFusion recognizer template: arcface_112_v2.
+    private static final float[][] ARCFACE_112_V2_NORMALIZED = {
+        {0.34191607f, 0.46157411f},
+        {0.65653393f, 0.45983393f},
+        {0.50022500f, 0.64050536f},
+        {0.37097589f, 0.82469196f},
+        {0.63151696f, 0.82325089f}
+    };
+
+    public static Bitmap alignArcFace112(Bitmap image, float[] landmarks) {
+        if (landmarks == null || landmarks.length < 10) {
+            return Bitmap.createScaledBitmap(image, 112, 112, true);
+        }
+
+        ensureOpenCv();
+        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(ARCFACE_112_V2_NORMALIZED, 112));
+        Mat source = new Mat();
+        Mat aligned = new Mat();
+        try {
+            Utils.bitmapToMat(image, source);
+            Imgproc.warpAffine(
+                source,
+                aligned,
+                affine,
+                new Size(112, 112),
+                Imgproc.INTER_AREA,
+                Core.BORDER_REPLICATE,
+                new Scalar(0, 0, 0, 255));
+
+            Bitmap result = Bitmap.createBitmap(112, 112, Bitmap.Config.ARGB_8888);
+            Utils.matToBitmap(aligned, result);
+            return result;
+        } finally {
+            source.release();
+            aligned.release();
+            affine.release();
+        }
+    }
+
     public static Bitmap alignFace(Bitmap image, float[] landmarks, int targetSize) {
         if (landmarks == null || landmarks.length < 10) {
             return Bitmap.createScaledBitmap(image, targetSize, targetSize, true);
         }
 
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(targetSize));
+        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, targetSize));
         Mat source = new Mat();
         Mat aligned = new Mat();
         try {
@@ -67,7 +105,7 @@ public final class SwapperImageUtils {
         }
 
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(faceSize));
+        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize));
 
         int width = targetImage.getWidth();
         int height = targetImage.getHeight();
@@ -179,7 +217,7 @@ public final class SwapperImageUtils {
         synchronized (SwapperImageUtils.class) {
             if (openCvReady) return;
             if (!OpenCVLoader.initLocal()) {
-                throw new IllegalStateException("OpenCV failed to initialize for HyperSwap");
+                throw new IllegalStateException("OpenCV failed to initialize for face processing");
             }
             openCvReady = true;
         }
@@ -199,7 +237,7 @@ public final class SwapperImageUtils {
             Mat affine = Calib3d.estimateAffinePartial2D(srcMat, dstMat);
             if (affine == null || affine.empty() || affine.rows() != 2 || affine.cols() != 3) {
                 if (affine != null) affine.release();
-                throw new IllegalArgumentException("Could not estimate HyperSwap affine transform");
+                throw new IllegalArgumentException("Could not estimate face affine transform");
             }
             return affine;
         } finally {
@@ -217,11 +255,11 @@ public final class SwapperImageUtils {
         return points;
     }
 
-    private static float[][] scaledTemplate(int size) {
+    private static float[][] scaledTemplate(float[][] normalizedTemplate, int size) {
         float[][] result = new float[5][2];
         for (int i = 0; i < 5; i++) {
-            result[i][0] = HYPERSWAP_256_NORMALIZED[i][0] * size;
-            result[i][1] = HYPERSWAP_256_NORMALIZED[i][1] * size;
+            result[i][0] = normalizedTemplate[i][0] * size;
+            result[i][1] = normalizedTemplate[i][1] * size;
         }
         return result;
     }
