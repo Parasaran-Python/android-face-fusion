@@ -2,16 +2,19 @@ name: Build Test APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "master" ]
 
 permissions:
   contents: read
+
+concurrency:
+  group: build-test-apk
+  cancel-in-progress: false
 
 jobs:
   build-test-apk:
     name: Build Installable Test APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repository
@@ -30,7 +33,10 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK exists
+        run: test -f app/build/outputs/apk/debug/app-debug.apk
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/FaceFusion-Test.apk
@@ -40,4 +46,5 @@ jobs:
         with:
           name: FaceFusion-Test-APK
           path: app/build/outputs/apk/debug/FaceFusion-Test.apk
+          if-no-files-found: error
           retention-days: 30
