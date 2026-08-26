@@ -168,9 +168,9 @@ public class FaceFusionProcessor {
     }
 
     /**
-     * Confidence-adaptive geometry fusion. SCRFD supplies very stable coarse anchors while
-     * 2DFAN supplies pose/expression accuracy. Keeping a small detector contribution prevents
-     * a single refined point from pulling the whole similarity crop off-axis on difficult faces.
+     * Confidence-adaptive geometry fusion. Low-confidence 2DFAN results fall back to the
+     * stable SCRFD anchors; medium-confidence results are blended conservatively; only a
+     * strong 2DFAN result is allowed to dominate the similarity alignment.
      */
     private float[] selectStableLandmarks5(FaceDetector.Face face, FaceLandmarker.Result refined) {
         if (refined == null || refined.landmarks5 == null || refined.landmarks5.length < 10) {
@@ -179,7 +179,13 @@ public class FaceFusionProcessor {
         if (face.landmarks == null || face.landmarks.length < 10) return refined.landmarks5;
 
         float score = Math.max(0.0f, Math.min(1.0f, refined.score));
-        float refinedWeight = 0.72f + 0.23f * score;
+        if (score < 0.55f) {
+            Log.d(TAG, "2DFAN confidence too low for alignment; using SCRFD anchors: score=" + score);
+            return face.landmarks;
+        }
+
+        float confidence = Math.min(1.0f, (score - 0.55f) / 0.30f);
+        float refinedWeight = 0.35f + 0.57f * confidence;
         float detectorWeight = 1.0f - refinedWeight;
         float[] fused = new float[10];
         for (int i = 0; i < 10; i++) {
