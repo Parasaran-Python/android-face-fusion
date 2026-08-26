@@ -514,7 +514,7 @@ public final class SwapperImageUtils {
             }
         }
 
-        Bitmap result = target.isMutable() ? target : target.copy(Bitmap.Config.ARGB_8888, true);
+        Bitmap result = target.copy(Bitmap.Config.ARGB_8888, true);
         result.setPixels(targetPixels, 0, width, x, y, width, height);
         return result;
     }
