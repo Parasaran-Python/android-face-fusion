@@ -7,11 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Coordinates detection, ArcFace identity extraction and face swapping.
- * The swap crop/paste resolution is now driven by FaceSwapper so HyperSwap can
- * operate natively at 256px while the INSwapper fallback remains at 128px.
- */
+/** Coordinates detection, ArcFace identity extraction and HyperSwap face swapping. */
 public class FaceFusionProcessor {
     private static final String TAG = "FaceFusionProcessor";
 
@@ -133,7 +129,7 @@ public class FaceFusionProcessor {
     }
 
     private float[] getSourceEmbedding(Bitmap sourceImage, FaceDetector.Face sourceFace) throws Exception {
-        Bitmap alignedSource = ImageUtils.alignFace(sourceImage, sourceFace.landmarks, 112);
+        Bitmap alignedSource = SwapperImageUtils.alignArcFace112(sourceImage, sourceFace.landmarks);
         try {
             return faceEmbedder.getEmbedding(alignedSource);
         } finally {
@@ -143,20 +139,11 @@ public class FaceFusionProcessor {
 
     private Bitmap swapOne(Bitmap targetImage, FaceDetector.Face targetFace, float[] sourceEmbedding) throws Exception {
         int swapSize = faceSwapper.getInputSize();
-        Bitmap alignedTarget;
-
-        if (swapSize == 128) {
-            alignedTarget = ImageUtils.alignFace(targetImage, targetFace.landmarks, 128);
-        } else {
-            alignedTarget = SwapperImageUtils.alignFace(targetImage, targetFace.landmarks, swapSize);
-        }
+        Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetFace.landmarks, swapSize);
 
         Bitmap swappedFace = null;
         try {
             swappedFace = faceSwapper.swapFace(alignedTarget, sourceEmbedding, targetImage);
-            if (swapSize == 128) {
-                return ImageUtils.blendFaces(targetImage, swappedFace, targetFace.landmarks, 128);
-            }
             return SwapperImageUtils.blendFace(targetImage, swappedFace, targetFace.landmarks, swapSize);
         } finally {
             if (!alignedTarget.isRecycled()) alignedTarget.recycle();
