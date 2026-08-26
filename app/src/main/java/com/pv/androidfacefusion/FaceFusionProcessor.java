@@ -17,10 +17,6 @@ public class FaceFusionProcessor {
     private final FaceLandmarker faceLandmarker;
     private final FaceParser faceParser;
 
-    /**
-     * Existing construction path used by the app. Quality helpers are additive and fail-safe:
-     * if either optional model cannot load, the proven detector/ArcFace/HyperSwap path remains usable.
-     */
     public FaceFusionProcessor(FaceDetector detector, FaceEmbedder embedder, FaceSwapper swapper) {
         this.faceDetector = detector;
         this.faceEmbedder = embedder;
@@ -114,8 +110,8 @@ public class FaceFusionProcessor {
             return processFaceFusionMultiple(sourceImage, targetImage);
         }
 
-        Log.d(TAG, "Starting quality face fusion; native swapper=" + faceSwapper.getInputSize()
-            + ", output crop=" + FaceSwapper.QUALITY_SIZE + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
+        Log.d(TAG, "Starting 512 quality face fusion; native HyperSwap tile=" + faceSwapper.getInputSize()
+            + ", reconstructed crop=" + FaceSwapper.QUALITY_SIZE + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
 
         List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
         if (sourceFaces.isEmpty()) {
@@ -176,25 +172,11 @@ public class FaceFusionProcessor {
         float[] semanticMask = faceParser != null ? faceParser.createMask(alignedTarget) : null;
         Bitmap swappedFace = null;
         try {
-            try {
-                swappedFace = faceSwapper.swapFace512(alignedTarget, sourceEmbedding);
-                return SwapperImageUtils.blendFace(
-                    targetImage, alignedTarget, swappedFace, targetLandmarks, qualitySize, semanticMask);
-            } catch (Exception qualityError) {
-                Log.w(TAG, "512 quality path failed; preserving working 256 HyperSwap path", qualityError);
-                if (swappedFace != null && !swappedFace.isRecycled()) {
-                    swappedFace.recycle();
-                    swappedFace = null;
-                }
-                Bitmap aligned256 = SwapperImageUtils.alignFace(targetImage, targetLandmarks, faceSwapper.getInputSize());
-                try {
-                    swappedFace = faceSwapper.swapFace(aligned256, sourceEmbedding, targetImage);
-                    return SwapperImageUtils.blendFace(
-                        targetImage, aligned256, swappedFace, targetLandmarks, faceSwapper.getInputSize(), null);
-                } finally {
-                    if (!aligned256.isRecycled()) aligned256.recycle();
-                }
-            }
+            swappedFace = faceSwapper.swapFace512(alignedTarget, sourceEmbedding);
+            return SwapperImageUtils.blendFace(
+                targetImage, alignedTarget, swappedFace, targetLandmarks, qualitySize, semanticMask);
+        } catch (Exception qualityError) {
+            throw new Exception("512 quality face swap failed: " + qualityError.getMessage(), qualityError);
         } finally {
             if (!alignedTarget.isRecycled()) alignedTarget.recycle();
             if (swappedFace != null && !swappedFace.isRecycled()) swappedFace.recycle();
