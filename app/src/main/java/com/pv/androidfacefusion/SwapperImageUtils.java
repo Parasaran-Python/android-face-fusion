@@ -4,17 +4,19 @@ import android.graphics.Bitmap;
 
 import org.opencv.android.OpenCVLoader;
 import org.opencv.android.Utils;
+import org.opencv.calib3d.Calib3d;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
 
 /**
- * HyperSwap 256 alignment and paste-back using the same geometry, interpolation,
- * border handling and soft oval mask as the proven ReActor CPU implementation.
+ * HyperSwap 256 alignment and paste-back using the same geometry, affine
+ * estimation, interpolation, border handling and soft oval mask as ReActor.
  */
 public final class SwapperImageUtils {
     private static volatile boolean openCvReady;
@@ -35,12 +37,9 @@ public final class SwapperImageUtils {
         }
 
         ensureOpenCv();
-        double[] affineValues = estimateSimilarityTransform(
-            unpackLandmarks(landmarks), scaledTemplate(targetSize));
-
+        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(targetSize));
         Mat source = new Mat();
         Mat aligned = new Mat();
-        Mat affine = affineMat(affineValues);
         try {
             Utils.bitmapToMat(image, source);
             Imgproc.warpAffine(
@@ -68,13 +67,11 @@ public final class SwapperImageUtils {
         }
 
         ensureOpenCv();
-        double[] affineValues = estimateSimilarityTransform(
-            unpackLandmarks(landmarks), scaledTemplate(faceSize));
+        Mat affine = estimateAffineTransform(unpackLandmarks(landmarks), scaledTemplate(faceSize));
 
         int width = targetImage.getWidth();
         int height = targetImage.getHeight();
 
-        Mat affine = affineMat(affineValues);
         Mat inverse = new Mat();
         Mat swappedMat = new Mat();
         Mat warpedFaceMat = new Mat();
@@ -85,7 +82,6 @@ public final class SwapperImageUtils {
             Imgproc.invertAffineTransform(affine, inverse);
             Utils.bitmapToMat(swappedFace, swappedMat);
 
-            // ReActor paste_back: high quality inverse face warp with a neutral gray border.
             Imgproc.warpAffine(
                 swappedMat,
                 warpedFaceMat,
@@ -95,7 +91,6 @@ public final class SwapperImageUtils {
                 Core.BORDER_CONSTANT,
                 new Scalar(127.5, 127.5, 127.5, 255));
 
-            // ReActor mask: centered oval, axes 35% x 40%, Gaussian blur 15.
             Imgproc.ellipse(
                 cropMask,
                 new Point(faceSize / 2.0, faceSize / 2.0),
@@ -190,10 +185,27 @@ public final class SwapperImageUtils {
         }
     }
 
-    private static Mat affineMat(double[] values) {
-        Mat affine = new Mat(2, 3, CvType.CV_64FC1);
-        affine.put(0, 0, values);
-        return affine;
+    private static Mat estimateAffineTransform(float[][] src, float[][] dst) {
+        Point[] srcPoints = new Point[src.length];
+        Point[] dstPoints = new Point[dst.length];
+        for (int i = 0; i < src.length; i++) {
+            srcPoints[i] = new Point(src[i][0], src[i][1]);
+            dstPoints[i] = new Point(dst[i][0], dst[i][1]);
+        }
+
+        MatOfPoint2f srcMat = new MatOfPoint2f(srcPoints);
+        MatOfPoint2f dstMat = new MatOfPoint2f(dstPoints);
+        try {
+            Mat affine = Calib3d.estimateAffinePartial2D(srcMat, dstMat);
+            if (affine == null || affine.empty() || affine.rows() != 2 || affine.cols() != 3) {
+                if (affine != null) affine.release();
+                throw new IllegalArgumentException("Could not estimate HyperSwap affine transform");
+            }
+            return affine;
+        } finally {
+            srcMat.release();
+            dstMat.release();
+        }
     }
 
     private static float[][] unpackLandmarks(float[] landmarks) {
@@ -212,48 +224,6 @@ public final class SwapperImageUtils {
             result[i][1] = HYPERSWAP_256_NORMALIZED[i][1] * size;
         }
         return result;
-    }
-
-    /** Closed-form least-squares 2D similarity transform, source -> destination. */
-    private static double[] estimateSimilarityTransform(float[][] src, float[][] dst) {
-        int n = src.length;
-        double srcCx = 0.0, srcCy = 0.0, dstCx = 0.0, dstCy = 0.0;
-        for (int i = 0; i < n; i++) {
-            srcCx += src[i][0];
-            srcCy += src[i][1];
-            dstCx += dst[i][0];
-            dstCy += dst[i][1];
-        }
-        srcCx /= n;
-        srcCy /= n;
-        dstCx /= n;
-        dstCy /= n;
-
-        double srcNorm = 0.0;
-        double a = 0.0;
-        double b = 0.0;
-        for (int i = 0; i < n; i++) {
-            double sx = src[i][0] - srcCx;
-            double sy = src[i][1] - srcCy;
-            double dx = dst[i][0] - dstCx;
-            double dy = dst[i][1] - dstCy;
-            srcNorm += sx * sx + sy * sy;
-            a += sx * dx + sy * dy;
-            b += sx * dy - sy * dx;
-        }
-
-        if (srcNorm < 1e-10) {
-            throw new IllegalArgumentException("Invalid face landmarks for HyperSwap alignment");
-        }
-
-        double m00 = a / srcNorm;
-        double m01 = -b / srcNorm;
-        double m10 = b / srcNorm;
-        double m11 = a / srcNorm;
-        double tx = dstCx - (m00 * srcCx + m01 * srcCy);
-        double ty = dstCy - (m10 * srcCx + m11 * srcCy);
-
-        return new double[]{m00, m01, tx, m10, m11, ty};
     }
 
     private static int clamp(int value) {
