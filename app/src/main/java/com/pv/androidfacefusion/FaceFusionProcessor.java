@@ -7,18 +7,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Coordinates detection, ArcFace identity extraction and HyperSwap face swapping. */
+/** Coordinates detection, refined alignment, ArcFace identity extraction and HyperSwap swapping. */
 public class FaceFusionProcessor {
     private static final String TAG = "FaceFusionProcessor";
 
     private final FaceDetector faceDetector;
     private final FaceEmbedder faceEmbedder;
     private final FaceSwapper faceSwapper;
+    private final FaceLandmarker faceLandmarker;
+    private final FaceParser faceParser;
 
     public FaceFusionProcessor(FaceDetector detector, FaceEmbedder embedder, FaceSwapper swapper) {
+        this(detector, embedder, swapper, null, null);
+    }
+
+    public FaceFusionProcessor(FaceDetector detector, FaceEmbedder embedder, FaceSwapper swapper,
+                               FaceLandmarker landmarker, FaceParser parser) {
         this.faceDetector = detector;
         this.faceEmbedder = embedder;
         this.faceSwapper = swapper;
+        this.faceLandmarker = landmarker;
+        this.faceParser = parser;
     }
 
     public Bitmap processFaceFusion(Bitmap sourceImage, Bitmap targetImage) throws Exception {
@@ -32,7 +41,7 @@ public class FaceFusionProcessor {
 
         List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
         if (sourceFaces.isEmpty()) {
-            throw new Exception("No face detected in source image. Please use an image with a clear, frontal face.");
+            throw new Exception("No face detected in source image. Please use an image with a clear face.");
         }
         float[] sourceEmbedding = getSourceEmbedding(sourceImage, sourceFaces.get(0));
 
@@ -77,12 +86,12 @@ public class FaceFusionProcessor {
             return processFaceFusionMultiple(sourceImage, targetImage);
         }
 
-        Log.d(TAG, "Starting face fusion; swapper size=" + faceSwapper.getInputSize()
-            + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
+        Log.d(TAG, "Starting quality face fusion; native swapper=" + faceSwapper.getInputSize()
+            + ", output crop=" + FaceSwapper.QUALITY_SIZE + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
 
         List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
         if (sourceFaces.isEmpty()) {
-            throw new Exception("No face detected in source image. Please use an image with a clear, frontal face.");
+            throw new Exception("No face detected in source image. Please use an image with a clear face.");
         }
 
         List<FaceDetector.Face> targetFaces = faceDetector.detectFaces(targetImage);
@@ -92,12 +101,10 @@ public class FaceFusionProcessor {
                 suggestion = " The target image is quite small (" + targetImage.getWidth() + "x"
                     + targetImage.getHeight() + "). Try using a larger image with a clearer face.";
             }
-            throw new Exception("No face detected in target image. Please use an image with a clear, frontal face." + suggestion);
+            throw new Exception("No face detected in target image." + suggestion);
         }
 
-        if (targetFaceIndex < 0 || targetFaceIndex >= targetFaces.size()) {
-            targetFaceIndex = 0;
-        }
+        if (targetFaceIndex < 0 || targetFaceIndex >= targetFaces.size()) targetFaceIndex = 0;
 
         float[] sourceEmbedding = getSourceEmbedding(sourceImage, sourceFaces.get(0));
         return swapOne(targetImage, targetFaces.get(targetFaceIndex), sourceEmbedding);
@@ -109,15 +116,11 @@ public class FaceFusionProcessor {
 
     public Bitmap processFaceFusionMultiple(Bitmap sourceImage, Bitmap targetImage) throws Exception {
         List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
-        if (sourceFaces.isEmpty()) {
-            throw new Exception("No face detected in source image");
-        }
+        if (sourceFaces.isEmpty()) throw new Exception("No face detected in source image");
         float[] sourceEmbedding = getSourceEmbedding(sourceImage, sourceFaces.get(0));
 
         List<FaceDetector.Face> targetFaces = faceDetector.detectFaces(targetImage);
-        if (targetFaces.isEmpty()) {
-            throw new Exception("No face detected in target image");
-        }
+        if (targetFaces.isEmpty()) throw new Exception("No face detected in target image");
 
         Bitmap result = targetImage.copy(Bitmap.Config.ARGB_8888, true);
         for (FaceDetector.Face targetFace : targetFaces) {
@@ -129,7 +132,8 @@ public class FaceFusionProcessor {
     }
 
     private float[] getSourceEmbedding(Bitmap sourceImage, FaceDetector.Face sourceFace) throws Exception {
-        Bitmap alignedSource = SwapperImageUtils.alignArcFace112(sourceImage, sourceFace.landmarks);
+        float[] sourceLandmarks = getRefinedLandmarks5(sourceImage, sourceFace);
+        Bitmap alignedSource = SwapperImageUtils.alignArcFace112(sourceImage, sourceLandmarks);
         try {
             return faceEmbedder.getEmbedding(alignedSource);
         } finally {
@@ -138,16 +142,44 @@ public class FaceFusionProcessor {
     }
 
     private Bitmap swapOne(Bitmap targetImage, FaceDetector.Face targetFace, float[] sourceEmbedding) throws Exception {
-        int swapSize = faceSwapper.getInputSize();
-        Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetFace.landmarks, swapSize);
-
+        float[] targetLandmarks = getRefinedLandmarks5(targetImage, targetFace);
+        int qualitySize = FaceSwapper.QUALITY_SIZE;
+        Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetLandmarks, qualitySize);
+        float[] semanticMask = faceParser != null ? faceParser.createMask(alignedTarget) : null;
         Bitmap swappedFace = null;
         try {
-            swappedFace = faceSwapper.swapFace(alignedTarget, sourceEmbedding, targetImage);
-            return SwapperImageUtils.blendFace(targetImage, swappedFace, targetFace.landmarks, swapSize);
+            try {
+                swappedFace = faceSwapper.swapFace512(alignedTarget, sourceEmbedding);
+                return SwapperImageUtils.blendFace(
+                    targetImage, alignedTarget, swappedFace, targetLandmarks, qualitySize, semanticMask);
+            } catch (Exception qualityError) {
+                Log.w(TAG, "512 quality path failed; preserving working 256 HyperSwap path", qualityError);
+                if (swappedFace != null && !swappedFace.isRecycled()) {
+                    swappedFace.recycle();
+                    swappedFace = null;
+                }
+                Bitmap aligned256 = SwapperImageUtils.alignFace(targetImage, targetLandmarks, faceSwapper.getInputSize());
+                try {
+                    swappedFace = faceSwapper.swapFace(aligned256, sourceEmbedding, targetImage);
+                    return SwapperImageUtils.blendFace(
+                        targetImage, aligned256, swappedFace, targetLandmarks, faceSwapper.getInputSize(), null);
+                } finally {
+                    if (!aligned256.isRecycled()) aligned256.recycle();
+                }
+            }
         } finally {
             if (!alignedTarget.isRecycled()) alignedTarget.recycle();
             if (swappedFace != null && !swappedFace.isRecycled()) swappedFace.recycle();
         }
+    }
+
+    private float[] getRefinedLandmarks5(Bitmap image, FaceDetector.Face face) {
+        if (faceLandmarker != null) {
+            FaceLandmarker.Result refined = faceLandmarker.refine(image, face);
+            if (refined != null && refined.landmarks5 != null && refined.landmarks5.length >= 10) {
+                return refined.landmarks5;
+            }
+        }
+        return face.landmarks;
     }
 }
