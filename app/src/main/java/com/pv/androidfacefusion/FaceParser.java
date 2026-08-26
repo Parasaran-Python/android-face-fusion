@@ -91,9 +91,9 @@ public final class FaceParser {
     }
 
     /**
-     * Base semantic identity weights. Brows intentionally stay mostly target-owned to prevent
-     * a second target brow edge being reintroduced over a generated brow during texture/edge
-     * restoration. The expression correction still aligns the generated brow geometry first.
+     * Base semantic identity weights. Brows now favour the generated face so the target brow
+     * is actually overwritten instead of surviving underneath as a second visible eyebrow.
+     * Eyes and mouth cavity remain target-led because gaze, blinking and teeth are expression cues.
      */
     private float regionBlendWeight(int label) {
         switch (label) {
@@ -104,7 +104,7 @@ public final class FaceParser {
                 return 1.0f;
             case 2:  // left brow
             case 3:  // right brow
-                return 0.10f;
+                return 0.72f;
             case 4:  // left eye
             case 5:  // right eye
                 return 0.20f;
