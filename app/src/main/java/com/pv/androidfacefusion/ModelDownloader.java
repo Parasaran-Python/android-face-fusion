@@ -20,7 +20,9 @@ public class ModelDownloader {
     private static final String TAG = "ModelDownloader";
 
     public static final String DET_MODEL = "det_10g.onnx";
-    public static final String REC_MODEL = "w600k_r50.onnx";
+    // Use FaceFusion's exact ArcFace recognizer and a distinct cache filename so
+    // existing installs cannot silently reuse the older InsightFace download.
+    public static final String REC_MODEL = "arcface_w600k_r50.onnx";
     public static final String HYPERSWAP_MODEL = "hyperswap_1b_256.onnx";
     public static final String INSWAPPER_MODEL = "inswapper_128.onnx";
 
@@ -29,7 +31,7 @@ public class ModelDownloader {
     );
 
     private static final List<String> REC_MODEL_URLS = Arrays.asList(
-        "https://huggingface.co/leonelhs/insightface/resolve/main/w600k_r50.onnx"
+        "https://huggingface.co/facefusion/models-3.0.0/resolve/main/arcface_w600k_r50.onnx?download=true"
     );
 
     // Primary Android upgrade: FaceFusion HyperSwap 1b 256 (~403 MB).
@@ -107,8 +109,8 @@ public class ModelDownloader {
     }
 
     /**
-     * Startup now requires detector + recognizer + HyperSwap. INSwapper is downloaded
-     * only if HyperSwap initialization fails and the compatibility fallback is needed.
+     * Startup requires detector + FaceFusion ArcFace recognizer + HyperSwap.
+     * INSwapper is downloaded only if HyperSwap initialization fails.
      */
     public boolean areAllModelsDownloaded() {
         return isModelDownloaded(DET_MODEL)
@@ -136,6 +138,11 @@ public class ModelDownloader {
             if (file.exists() && !file.delete()) {
                 Log.w(TAG, "Could not delete cached model: " + modelName);
             }
+        }
+        // Also remove the legacy recognizer cache from older test builds.
+        File legacyRecognizer = new File(context.getFilesDir(), "w600k_r50.onnx");
+        if (legacyRecognizer.exists() && !legacyRecognizer.delete()) {
+            Log.w(TAG, "Could not delete legacy cached recognizer: w600k_r50.onnx");
         }
     }
 
