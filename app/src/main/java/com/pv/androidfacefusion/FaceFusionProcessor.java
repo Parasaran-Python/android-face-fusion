@@ -110,8 +110,8 @@ public class FaceFusionProcessor {
             return processFaceFusionMultiple(sourceImage, targetImage);
         }
 
-        Log.d(TAG, "Starting 512 quality face fusion; native HyperSwap tile=" + faceSwapper.getInputSize()
-            + ", reconstructed crop=" + FaceSwapper.QUALITY_SIZE + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
+        Log.d(TAG, "Starting " + FaceSwapper.QUALITY_SIZE + " quality face fusion; native HyperSwap tile="
+            + faceSwapper.getInputSize() + ", HyperSwap=" + faceSwapper.isUsingHyperSwap());
 
         List<FaceDetector.Face> sourceFaces = faceDetector.detectFaces(sourceImage);
         if (sourceFaces.isEmpty()) {
@@ -172,11 +172,11 @@ public class FaceFusionProcessor {
         float[] semanticMask = faceParser != null ? faceParser.createMask(alignedTarget) : null;
         Bitmap swappedFace = null;
         try {
-            swappedFace = faceSwapper.swapFace512(alignedTarget, sourceEmbedding);
+            swappedFace = faceSwapper.swapFaceQuality(alignedTarget, sourceEmbedding);
             return SwapperImageUtils.blendFace(
                 targetImage, alignedTarget, swappedFace, targetLandmarks, qualitySize, semanticMask);
         } catch (Exception qualityError) {
-            throw new Exception("512 quality face swap failed: " + qualityError.getMessage(), qualityError);
+            throw new Exception(qualitySize + " quality face swap failed: " + qualityError.getMessage(), qualityError);
         } finally {
             if (!alignedTarget.isRecycled()) alignedTarget.recycle();
             if (swappedFace != null && !swappedFace.isRecycled()) swappedFace.recycle();
