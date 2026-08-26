@@ -1,0 +1,200 @@
+package com.pv.androidfacefusion;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.util.Log;
+
+import java.io.File;
+import java.nio.FloatBuffer;
+import java.util.Collections;
+
+import ai.onnxruntime.OnnxTensor;
+import ai.onnxruntime.OrtEnvironment;
+import ai.onnxruntime.OrtSession;
+
+/** FaceFusion-compatible 2DFAN4 landmark refinement for more stable pose alignment. */
+public final class FaceLandmarker {
+    private static final String TAG = "FaceLandmarker";
+    private static final int INPUT_SIZE = 256;
+
+    public static final class Result {
+        public final float[] landmarks68;
+        public final float[] landmarks5;
+
+        Result(float[] landmarks68, float[] landmarks5) {
+            this.landmarks68 = landmarks68;
+            this.landmarks5 = landmarks5;
+        }
+    }
+
+    private final Context context;
+    private final OrtEnvironment env;
+    private OrtSession session;
+    private String inputName;
+
+    public FaceLandmarker(Context context) {
+        this.context = context.getApplicationContext();
+        this.env = OrtEnvironment.getEnvironment();
+    }
+
+    public void initialize() throws Exception {
+        ModelDownloader downloader = new ModelDownloader(context);
+        File model = downloader.getModelFile(ModelDownloader.LANDMARKER_MODEL);
+        session = OrtSessionHelper.createSession(env, model.getAbsolutePath(), TAG);
+        inputName = session.getInputNames().iterator().next();
+        Log.i(TAG, "2DFAN4 landmark refinement initialized");
+    }
+
+    public Result refine(Bitmap image, FaceDetector.Face face) {
+        if (session == null || image == null || face == null || face.bbox == null) return null;
+
+        float faceWidth = Math.max(1.0f, face.bbox.width());
+        float faceHeight = Math.max(1.0f, face.bbox.height());
+        float maxDimension = Math.max(faceWidth, faceHeight);
+
+        // FaceFusion's 2DFAN4 crop maps the largest bbox dimension to 195px in a 256px crop.
+        float cropSize = maxDimension * INPUT_SIZE / 195.0f;
+        float centerX = face.bbox.centerX();
+        float centerY = face.bbox.centerY();
+        float cropLeft = centerX - cropSize * 0.5f;
+        float cropTop = centerY - cropSize * 0.5f;
+
+        Bitmap crop = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(crop);
+        Matrix matrix = new Matrix();
+        matrix.setRectToRect(
+            new RectF(cropLeft, cropTop, cropLeft + cropSize, cropTop + cropSize),
+            new RectF(0, 0, INPUT_SIZE, INPUT_SIZE),
+            Matrix.ScaleToFit.FILL);
+        canvas.drawBitmap(image, matrix, new Paint(Paint.FILTER_BITMAP_FLAG));
+
+        try {
+            float[] input = bitmapToInput(crop);
+            try (OnnxTensor tensor = OnnxTensor.createTensor(
+                    env, FloatBuffer.wrap(input), new long[]{1, 3, INPUT_SIZE, INPUT_SIZE});
+                 OrtSession.Result outputs = session.run(Collections.singletonMap(inputName, tensor))) {
+                float[] local68 = readLandmarkOutput(outputs.get(0).getValue());
+                if (local68 == null) return null;
+
+                float[] image68 = new float[136];
+                for (int i = 0; i < 68; i++) {
+                    // FaceFusion maps 2DFAN4's 64-grid coordinate prediction back to 256px.
+                    float x256 = local68[i * 2] * 4.0f;
+                    float y256 = local68[i * 2 + 1] * 4.0f;
+                    image68[i * 2] = cropLeft + x256 * cropSize / INPUT_SIZE;
+                    image68[i * 2 + 1] = cropTop + y256 * cropSize / INPUT_SIZE;
+                }
+                float[] refined5 = convert68To5(image68);
+                if (!isValid(refined5, image.getWidth(), image.getHeight())) return null;
+                return new Result(image68, refined5);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Landmark refinement failed; using detector landmarks", e);
+            return null;
+        } finally {
+            crop.recycle();
+        }
+    }
+
+    private float[] bitmapToInput(Bitmap bitmap) {
+        int[] pixels = new int[INPUT_SIZE * INPUT_SIZE];
+        bitmap.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE);
+        int plane = pixels.length;
+        float[] output = new float[plane * 3];
+        for (int i = 0; i < plane; i++) {
+            int pixel = pixels[i];
+            output[i] = ((pixel >> 16) & 0xFF) / 255.0f;
+            output[plane + i] = ((pixel >> 8) & 0xFF) / 255.0f;
+            output[plane * 2 + i] = (pixel & 0xFF) / 255.0f;
+        }
+        return output;
+    }
+
+    private float[] readLandmarkOutput(Object value) {
+        float[] result = new float[136];
+        if (value instanceof float[][][]) {
+            float[][][] data = (float[][][]) value;
+            if (data.length < 1 || data[0].length < 68) return null;
+            for (int i = 0; i < 68; i++) {
+                if (data[0][i].length < 2) return null;
+                result[i * 2] = data[0][i][0];
+                result[i * 2 + 1] = data[0][i][1];
+            }
+            return result;
+        }
+        if (value instanceof float[][]) {
+            float[][] data = (float[][]) value;
+            if (data.length >= 68 && data[0].length >= 2) {
+                for (int i = 0; i < 68; i++) {
+                    result[i * 2] = data[i][0];
+                    result[i * 2 + 1] = data[i][1];
+                }
+                return result;
+            }
+            if (data.length == 1 && data[0].length >= 136) {
+                for (int i = 0; i < 68; i++) {
+                    int stride = data[0].length >= 204 ? 3 : 2;
+                    result[i * 2] = data[0][i * stride];
+                    result[i * 2 + 1] = data[0][i * stride + 1];
+                }
+                return result;
+            }
+        }
+        Log.w(TAG, "Unexpected 2DFAN4 landmark output type: " + value.getClass().getName());
+        return null;
+    }
+
+    private float[] convert68To5(float[] points) {
+        float[] five = new float[10];
+        averageRange(points, 36, 42, five, 0);
+        averageRange(points, 42, 48, five, 2);
+        copyPoint(points, 30, five, 4);
+        copyPoint(points, 48, five, 6);
+        copyPoint(points, 54, five, 8);
+        return five;
+    }
+
+    private void averageRange(float[] source, int start, int end, float[] dest, int destOffset) {
+        float x = 0.0f;
+        float y = 0.0f;
+        for (int i = start; i < end; i++) {
+            x += source[i * 2];
+            y += source[i * 2 + 1];
+        }
+        float count = end - start;
+        dest[destOffset] = x / count;
+        dest[destOffset + 1] = y / count;
+    }
+
+    private void copyPoint(float[] source, int index, float[] dest, int destOffset) {
+        dest[destOffset] = source[index * 2];
+        dest[destOffset + 1] = source[index * 2 + 1];
+    }
+
+    private boolean isValid(float[] landmarks, int width, int height) {
+        for (int i = 0; i < landmarks.length; i += 2) {
+            float x = landmarks[i];
+            float y = landmarks[i + 1];
+            if (!Float.isFinite(x) || !Float.isFinite(y)) return false;
+            if (x < -width * 0.25f || x > width * 1.25f || y < -height * 0.25f || y > height * 1.25f) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public void close() {
+        if (session != null) {
+            try {
+                session.close();
+            } catch (Exception e) {
+                Log.w(TAG, "Error closing landmarker", e);
+            }
+            session = null;
+        }
+    }
+}
