@@ -93,7 +93,7 @@ public final class SwapperImageUtils {
         return blendFace(targetImage, alignedTarget, swappedFace, landmarks, null, faceSize, semanticMask);
     }
 
-    /** Natural high-resolution paste-back with semantic and 68-point pose-aware boundaries. */
+    /** Natural high-resolution paste-back with semantic, expression and pose-aware blending. */
     public static Bitmap blendFace(Bitmap targetImage, Bitmap alignedTarget, Bitmap swappedFace,
                                    float[] landmarks5, float[] landmarks68, int faceSize, float[] semanticMask) {
         if (landmarks5 == null || landmarks5.length < 10) {
@@ -115,7 +115,7 @@ public final class SwapperImageUtils {
 
         float[] cropMaskValues = createNaturalCropMask(faceSize, semanticMask, affine, landmarks68);
         Bitmap correctedFace = alignedTarget != null
-            ? matchColorAndLighting(alignedTarget, swappedFace, cropMaskValues)
+            ? matchColorLightingAndTexture(alignedTarget, swappedFace, cropMaskValues)
             : swappedFace;
 
         Mat cropMask = new Mat(faceSize, faceSize, CvType.CV_32FC1);
@@ -125,7 +125,7 @@ public final class SwapperImageUtils {
         Mat roiMatrix = offsetAffine(inverse, roi[0], roi[1]);
         try {
             cropMask.put(0, 0, cropMaskValues);
-            Imgproc.GaussianBlur(cropMask, cropMask, new Size(15, 15), 0.0);
+            Imgproc.GaussianBlur(cropMask, cropMask, new Size(0, 0), Math.max(3.0, faceSize * 0.014));
             Core.max(cropMask, new Scalar(0.0), cropMask);
             Core.min(cropMask, new Scalar(1.0), cropMask);
 
@@ -134,14 +134,15 @@ public final class SwapperImageUtils {
                 Imgproc.INTER_LANCZOS4, Core.BORDER_CONSTANT, new Scalar(127.5, 127.5, 127.5, 255));
             Imgproc.warpAffine(cropMask, warpedMask, roiMatrix, new Size(roiWidth, roiHeight),
                 Imgproc.INTER_CUBIC, Core.BORDER_CONSTANT, new Scalar(0.0));
-            Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(3, 3), 0.0);
+            Imgproc.GaussianBlur(warpedMask, warpedMask, new Size(0, 0),
+                Math.max(1.4, Math.min(3.6, Math.max(roiWidth, roiHeight) * 0.005)));
             Core.max(warpedMask, new Scalar(0.0), warpedMask);
             Core.min(warpedMask, new Scalar(1.0), warpedMask);
 
             Bitmap warpedFace = Bitmap.createBitmap(roiWidth, roiHeight, Bitmap.Config.ARGB_8888);
             try {
                 Utils.matToBitmap(warpedFaceMat, warpedFace);
-                return blendRoi(targetImage, warpedFace, warpedMask, roi[0], roi[1]);
+                return blendRoiEdgeAware(targetImage, warpedFace, warpedMask, roi[0], roi[1]);
             } finally {
                 warpedFace.recycle();
             }
@@ -178,30 +179,29 @@ public final class SwapperImageUtils {
         }
 
         if (landmarks68 != null && landmarks68.length >= 136) {
-            float[] poseMask = createPoseContourMask(size, affine, landmarks68);
+            float[] aligned68 = transformLandmarks68(affine, landmarks68);
+            float[] poseMask = createPoseContourMask(size, aligned68);
             if (poseMask != null) {
-                for (int i = 0; i < mask.length; i++) mask[i] *= poseMask[i];
+                for (int i = 0; i < mask.length; i++) {
+                    float poseInfluence = 0.38f + 0.62f * clamp01(poseMask[i]);
+                    mask[i] *= poseInfluence;
+                }
             }
+            applyPoseAsymmetry(mask, size, aligned68);
+            applyExpressionAwareProtection(mask, size, aligned68);
         }
         return mask;
     }
 
-    /**
-     * Build a soft face silhouette from the real jaw and brow geometry. The brow arc is
-     * lifted slightly to cover the forehead while BiSeNet remains responsible for excluding hair.
-     * This narrows the far cheek/temple naturally when the head is turned.
-     */
-    private static float[] createPoseContourMask(int size, Mat affine, float[] landmarks68) {
-        double[] a = new double[6];
-        affine.get(0, 0, a);
+    /** Build a broad soft silhouette. BiSeNet remains the hard hair/background protection. */
+    private static float[] createPoseContourMask(int size, float[] aligned68) {
         List<Point> polygon = new ArrayList<>();
-
-        for (int i = 0; i <= 16; i++) polygon.add(transformPoint(landmarks68, i, a));
-
-        double foreheadLift = size * 0.115;
+        for (int i = 0; i <= 16; i++) {
+            polygon.add(new Point(aligned68[i * 2], aligned68[i * 2 + 1]));
+        }
+        double foreheadLift = size * 0.135;
         for (int i = 26; i >= 17; i--) {
-            Point p = transformPoint(landmarks68, i, a);
-            polygon.add(new Point(p.x, p.y - foreheadLift));
+            polygon.add(new Point(aligned68[i * 2], aligned68[i * 2 + 1] - foreheadLift));
         }
         if (polygon.size() < 3) return null;
 
@@ -210,7 +210,7 @@ public final class SwapperImageUtils {
         try {
             contour.fromList(polygon);
             Imgproc.fillConvexPoly(contourMask, contour, new Scalar(1.0));
-            Imgproc.GaussianBlur(contourMask, contourMask, new Size(0, 0), Math.max(2.0, size * 0.009));
+            Imgproc.GaussianBlur(contourMask, contourMask, new Size(0, 0), Math.max(3.0, size * 0.020));
             Core.max(contourMask, new Scalar(0.0), contourMask);
             Core.min(contourMask, new Scalar(1.0), contourMask);
             float[] result = new float[size * size];
@@ -222,14 +222,125 @@ public final class SwapperImageUtils {
         }
     }
 
-    private static Point transformPoint(float[] points, int index, double[] a) {
-        double x = points[index * 2];
-        double y = points[index * 2 + 1];
-        return new Point(a[0] * x + a[1] * y + a[2], a[3] * x + a[4] * y + a[5]);
+    /** Slightly protect the far cheek/temple on turned faces without creating a hard boundary. */
+    private static void applyPoseAsymmetry(float[] mask, int size, float[] p) {
+        float leftEye = (p[36 * 2] + p[39 * 2]) * 0.5f;
+        float rightEye = (p[42 * 2] + p[45 * 2]) * 0.5f;
+        float eyeMid = (leftEye + rightEye) * 0.5f;
+        float eyeSpan = Math.max(1.0f, Math.abs(rightEye - leftEye));
+        float noseX = p[30 * 2];
+        float yaw = Math.max(-1.0f, Math.min(1.0f, (noseX - eyeMid) / (eyeSpan * 0.52f)));
+        if (Math.abs(yaw) < 0.10f) return;
+
+        boolean farSideLeft = yaw > 0.0f;
+        float strength = Math.min(0.18f, Math.abs(yaw) * 0.16f);
+        float center = size * 0.5f;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                boolean onFarSide = farSideLeft ? x < center : x > center;
+                if (!onFarSide) continue;
+                float distance = Math.abs(x - center) / center;
+                if (distance < 0.35f) continue;
+                float factor = 1.0f - strength * ((distance - 0.35f) / 0.65f);
+                int i = y * size + x;
+                mask[i] *= Math.max(0.80f, factor);
+            }
+        }
     }
 
-    /** Conservative masked channel transfer: adapts broad skin tone/lighting while preserving detail. */
-    private static Bitmap matchColorAndLighting(Bitmap target, Bitmap swapped, float[] mask) {
+    /** Preserve the target's gaze and mouth mechanics according to actual expression openness. */
+    private static void applyExpressionAwareProtection(float[] mask, int size, float[] p) {
+        float leftEyeOpen = opennessRatio(p, 36, 39, 37, 41, 38, 40);
+        float rightEyeOpen = opennessRatio(p, 42, 45, 43, 47, 44, 46);
+        applySoftFeatureProtection(mask, size, featureCenter(p, 36, 41),
+            featureWidth(p, 36, 39) * 0.72f, size * 0.030f,
+            eyeProtectionWeight(leftEyeOpen));
+        applySoftFeatureProtection(mask, size, featureCenter(p, 42, 47),
+            featureWidth(p, 42, 45) * 0.72f, size * 0.030f,
+            eyeProtectionWeight(rightEyeOpen));
+
+        float mouthWidth = Math.max(1.0f, distance(p, 48, 54));
+        float mouthOpen = distance(p, 62, 66) / mouthWidth;
+        float[] mouthCenter = featureCenter(p, 48, 67);
+        float mouthWeight = mouthOpen > 0.16f ? 0.10f : (mouthOpen > 0.08f ? 0.18f : 0.28f);
+        applySoftFeatureProtection(mask, size, mouthCenter,
+            mouthWidth * 0.60f, Math.max(size * 0.035f, mouthWidth * 0.22f), mouthWeight);
+    }
+
+    private static float eyeProtectionWeight(float openness) {
+        if (openness > 0.32f) return 0.12f;
+        if (openness > 0.20f) return 0.20f;
+        return 0.32f;
+    }
+
+    private static float opennessRatio(float[] p, int left, int right,
+                                       int upperA, int lowerA, int upperB, int lowerB) {
+        float width = Math.max(1.0f, distance(p, left, right));
+        float vertical = (distance(p, upperA, lowerA) + distance(p, upperB, lowerB)) * 0.5f;
+        return vertical / width;
+    }
+
+    private static void applySoftFeatureProtection(float[] mask, int size, float[] center,
+                                                   float radiusX, float radiusY, float minimumWeight) {
+        radiusX = Math.max(4.0f, radiusX);
+        radiusY = Math.max(4.0f, radiusY);
+        int x0 = Math.max(0, (int) Math.floor(center[0] - radiusX * 1.6f));
+        int x1 = Math.min(size - 1, (int) Math.ceil(center[0] + radiusX * 1.6f));
+        int y0 = Math.max(0, (int) Math.floor(center[1] - radiusY * 1.6f));
+        int y1 = Math.min(size - 1, (int) Math.ceil(center[1] + radiusY * 1.6f));
+        for (int y = y0; y <= y1; y++) {
+            float dy = (y - center[1]) / radiusY;
+            for (int x = x0; x <= x1; x++) {
+                float dx = (x - center[0]) / radiusX;
+                float d2 = dx * dx + dy * dy;
+                if (d2 >= 2.56f) continue;
+                float core = clamp01(1.0f - (float) Math.sqrt(d2) / 1.6f);
+                float localLimit = 1.0f - core * (1.0f - minimumWeight);
+                int i = y * size + x;
+                mask[i] = Math.min(mask[i], localLimit);
+            }
+        }
+    }
+
+    private static float[] transformLandmarks68(Mat affine, float[] landmarks68) {
+        double[] a = new double[6];
+        affine.get(0, 0, a);
+        float[] result = new float[136];
+        for (int i = 0; i < 68; i++) {
+            double x = landmarks68[i * 2];
+            double y = landmarks68[i * 2 + 1];
+            result[i * 2] = (float) (a[0] * x + a[1] * y + a[2]);
+            result[i * 2 + 1] = (float) (a[3] * x + a[4] * y + a[5]);
+        }
+        return result;
+    }
+
+    private static float[] featureCenter(float[] p, int start, int end) {
+        float x = 0.0f, y = 0.0f;
+        int count = end - start + 1;
+        for (int i = start; i <= end; i++) {
+            x += p[i * 2];
+            y += p[i * 2 + 1];
+        }
+        return new float[]{x / count, y / count};
+    }
+
+    private static float featureWidth(float[] p, int left, int right) {
+        return Math.max(1.0f, distance(p, left, right));
+    }
+
+    private static float distance(float[] p, int a, int b) {
+        float dx = p[a * 2] - p[b * 2];
+        float dy = p[a * 2 + 1] - p[b * 2 + 1];
+        return (float) Math.sqrt(dx * dx + dy * dy);
+    }
+
+    /**
+     * Match broad colour, then transfer target low-frequency luminance and a conservative amount
+     * of target high-frequency texture. This keeps identity from HyperSwap while restoring the
+     * target photo's lighting, pores and fine camera texture.
+     */
+    private static Bitmap matchColorLightingAndTexture(Bitmap target, Bitmap swapped, float[] mask) {
         int width = swapped.getWidth();
         int height = swapped.getHeight();
         Bitmap targetSized = target;
@@ -247,7 +358,7 @@ public final class SwapperImageUtils {
         double weightSum = 0.0;
         for (int i = 0; i < count; i++) {
             float weight = mask != null && mask.length == count ? mask[i] : 1.0f;
-            if (weight < 0.2f) continue;
+            if (weight < 0.18f) continue;
             int tp = targetPixels[i];
             int sp = swappedPixels[i];
             targetMean[0] += ((tp >> 16) & 0xFF) * weight;
@@ -269,13 +380,19 @@ public final class SwapperImageUtils {
 
         double[] targetVar = new double[3];
         double[] swapVar = new double[3];
+        float[] targetLuma = new float[count];
+        float[] swapLuma = new float[count];
         for (int i = 0; i < count; i++) {
-            float weight = mask != null && mask.length == count ? mask[i] : 1.0f;
-            if (weight < 0.2f) continue;
             int tp = targetPixels[i];
             int sp = swappedPixels[i];
-            double[] tv = {((tp >> 16) & 0xFF), ((tp >> 8) & 0xFF), (tp & 0xFF)};
-            double[] sv = {((sp >> 16) & 0xFF), ((sp >> 8) & 0xFF), (sp & 0xFF)};
+            int tr = (tp >> 16) & 0xFF, tg = (tp >> 8) & 0xFF, tb = tp & 0xFF;
+            int sr = (sp >> 16) & 0xFF, sg = (sp >> 8) & 0xFF, sb = sp & 0xFF;
+            targetLuma[i] = 0.299f * tr + 0.587f * tg + 0.114f * tb;
+            swapLuma[i] = 0.299f * sr + 0.587f * sg + 0.114f * sb;
+            float weight = mask != null && mask.length == count ? mask[i] : 1.0f;
+            if (weight < 0.18f) continue;
+            double[] tv = {tr, tg, tb};
+            double[] sv = {sr, sg, sb};
             for (int c = 0; c < 3; c++) {
                 double td = tv[c] - targetMean[c];
                 double sd = sv[c] - swapMean[c];
@@ -289,53 +406,114 @@ public final class SwapperImageUtils {
             double targetStd = Math.sqrt(targetVar[c] / weightSum);
             double swapStd = Math.sqrt(swapVar[c] / weightSum);
             double raw = swapStd > 1.0 ? targetStd / swapStd : 1.0;
-            scale[c] = Math.max(0.85, Math.min(1.18, raw));
+            scale[c] = Math.max(0.88, Math.min(1.15, raw));
         }
 
-        final double strength = 0.58;
+        int lowRadius = Math.max(5, Math.min(22, Math.round(Math.min(width, height) * 0.025f)));
+        float[] targetLow = boxBlur(targetLuma, width, height, lowRadius);
+        float[] swapLow = boxBlur(swapLuma, width, height, lowRadius);
+
+        final double colourStrength = 0.48;
+        final float lightingStrength = 0.34f;
+        final float textureStrength = 0.17f;
         int[] output = new int[count];
         for (int i = 0; i < count; i++) {
             int sp = swappedPixels[i];
-            int[] source = {(sp >> 16) & 0xFF, (sp >> 8) & 0xFF, sp & 0xFF};
+            int sr = (sp >> 16) & 0xFF, sg = (sp >> 8) & 0xFF, sb = sp & 0xFF;
+            int[] source = {sr, sg, sb};
+            float naturalWeight = mask != null && mask.length == count ? clamp01(mask[i] * 1.25f) : 1.0f;
+            float lightingDelta = (targetLow[i] - swapLow[i]) * lightingStrength * naturalWeight;
+            float targetDetail = (targetLuma[i] - targetLow[i]) * textureStrength * naturalWeight;
             int[] corrected = new int[3];
             for (int c = 0; c < 3; c++) {
                 double mapped = (source[c] - swapMean[c]) * scale[c] + targetMean[c];
-                corrected[c] = clamp((int) Math.round(source[c] * (1.0 - strength) + mapped * strength));
+                double colour = source[c] * (1.0 - colourStrength) + mapped * colourStrength;
+                corrected[c] = clamp((int) Math.round(colour + lightingDelta + targetDetail));
             }
             output[i] = 0xFF000000 | (corrected[0] << 16) | (corrected[1] << 8) | corrected[2];
         }
+
         Bitmap result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         result.setPixels(output, 0, width, 0, 0, width, height);
         if (targetSized != target) targetSized.recycle();
         return result;
     }
 
-    private static Bitmap blendRoi(Bitmap target, Bitmap face, Mat mask, int x, int y) {
+    /** Fast separable box blur used only for low-frequency luminance transfer. */
+    private static float[] boxBlur(float[] source, int width, int height, int radius) {
+        if (radius <= 0) return source.clone();
+        float[] horizontal = new float[source.length];
+        float[] result = new float[source.length];
+        float[] prefix = new float[Math.max(width, height) + 1];
+
+        for (int y = 0; y < height; y++) {
+            prefix[0] = 0.0f;
+            int row = y * width;
+            for (int x = 0; x < width; x++) prefix[x + 1] = prefix[x] + source[row + x];
+            for (int x = 0; x < width; x++) {
+                int left = Math.max(0, x - radius);
+                int right = Math.min(width - 1, x + radius);
+                horizontal[row + x] = (prefix[right + 1] - prefix[left]) / (right - left + 1);
+            }
+        }
+
+        for (int x = 0; x < width; x++) {
+            prefix[0] = 0.0f;
+            for (int y = 0; y < height; y++) prefix[y + 1] = prefix[y] + horizontal[y * width + x];
+            for (int y = 0; y < height; y++) {
+                int top = Math.max(0, y - radius);
+                int bottom = Math.min(height - 1, y + radius);
+                result[y * width + x] = (prefix[bottom + 1] - prefix[top]) / (bottom - top + 1);
+            }
+        }
+        return result;
+    }
+
+    /** Preserve strong target edges slightly so jaw shadows, eyelids and facial folds remain coherent. */
+    private static Bitmap blendRoiEdgeAware(Bitmap target, Bitmap face, Mat mask, int x, int y) {
         int width = face.getWidth();
         int height = face.getHeight();
         int count = width * height;
         int[] targetPixels = new int[count];
         int[] facePixels = new int[count];
         float[] maskValues = new float[count];
+        float[] luma = new float[count];
         target.getPixels(targetPixels, 0, width, x, y, width, height);
         face.getPixels(facePixels, 0, width, 0, 0, width, height);
         mask.get(0, 0, maskValues);
         for (int i = 0; i < count; i++) {
-            float alpha = clamp01(maskValues[i]);
-            if (alpha <= 0.0001f) continue;
-            int targetPixel = targetPixels[i];
-            int facePixel = facePixels[i];
-            int tr = (targetPixel >> 16) & 0xFF;
-            int tg = (targetPixel >> 8) & 0xFF;
-            int tb = targetPixel & 0xFF;
-            int fr = (facePixel >> 16) & 0xFF;
-            int fg = (facePixel >> 8) & 0xFF;
-            int fb = facePixel & 0xFF;
-            int r = clamp(Math.round(tr * (1.0f - alpha) + fr * alpha));
-            int g = clamp(Math.round(tg * (1.0f - alpha) + fg * alpha));
-            int b = clamp(Math.round(tb * (1.0f - alpha) + fb * alpha));
-            targetPixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            int p = targetPixels[i];
+            luma[i] = 0.299f * ((p >> 16) & 0xFF) + 0.587f * ((p >> 8) & 0xFF) + 0.114f * (p & 0xFF);
         }
+
+        for (int py = 0; py < height; py++) {
+            for (int px = 0; px < width; px++) {
+                int i = py * width + px;
+                float alpha = clamp01(maskValues[i]);
+                if (alpha <= 0.0001f) continue;
+
+                if (px > 0 && px + 1 < width && py > 0 && py + 1 < height) {
+                    float gx = Math.abs(luma[i + 1] - luma[i - 1]);
+                    float gy = Math.abs(luma[i + width] - luma[i - width]);
+                    float edge = clamp01((gx + gy) / 110.0f);
+                    alpha *= 1.0f - 0.12f * edge;
+                }
+
+                int targetPixel = targetPixels[i];
+                int facePixel = facePixels[i];
+                int tr = (targetPixel >> 16) & 0xFF;
+                int tg = (targetPixel >> 8) & 0xFF;
+                int tb = targetPixel & 0xFF;
+                int fr = (facePixel >> 16) & 0xFF;
+                int fg = (facePixel >> 8) & 0xFF;
+                int fb = facePixel & 0xFF;
+                int r = clamp(Math.round(tr * (1.0f - alpha) + fr * alpha));
+                int g = clamp(Math.round(tg * (1.0f - alpha) + fg * alpha));
+                int b = clamp(Math.round(tb * (1.0f - alpha) + fb * alpha));
+                targetPixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+
         Bitmap result = target.copy(Bitmap.Config.ARGB_8888, true);
         result.setPixels(targetPixels, 0, width, x, y, width, height);
         return result;

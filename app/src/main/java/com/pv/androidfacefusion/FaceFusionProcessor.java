@@ -73,8 +73,9 @@ public class FaceFusionProcessor {
         Bitmap result = targetImage.copy(Bitmap.Config.ARGB_8888, true);
         for (int i = 0; i < targetFaces.size(); i++) {
             if (!selectedFaceIndices.contains(i)) continue;
-            Bitmap next = swapOne(result, targetFaces.get(i), sourceEmbedding);
-            if (result != targetImage && !result.isRecycled()) result.recycle();
+            Bitmap previous = result;
+            Bitmap next = swapOne(previous, targetFaces.get(i), sourceEmbedding);
+            if (next != previous && previous != targetImage && !previous.isRecycled()) previous.recycle();
             result = next;
         }
         return result;
@@ -89,8 +90,9 @@ public class FaceFusionProcessor {
         for (int i = 0; i < targetFaces.size(); i++) {
             float[] embedding = targetIndexToEmbeddingMap.get(i);
             if (embedding == null) continue;
-            Bitmap next = swapOne(result, targetFaces.get(i), embedding);
-            if (result != targetImage && !result.isRecycled()) result.recycle();
+            Bitmap previous = result;
+            Bitmap next = swapOne(previous, targetFaces.get(i), embedding);
+            if (next != previous && previous != targetImage && !previous.isRecycled()) previous.recycle();
             result = next;
         }
         return result;
@@ -109,7 +111,18 @@ public class FaceFusionProcessor {
         if (targetFaceIndex < 0 || targetFaceIndex >= targetFaces.size()) targetFaceIndex = 0;
 
         float[] sourceEmbedding = getSourceEmbedding(sourceImage, sourceFaces.get(0));
-        return swapOne(targetImage, targetFaces.get(targetFaceIndex), sourceEmbedding);
+
+        // Always process against a dedicated mutable working bitmap so the caller's original
+        // target can never be modified in place by ROI compositing.
+        Bitmap workingTarget = targetImage.copy(Bitmap.Config.ARGB_8888, true);
+        try {
+            Bitmap result = swapOne(workingTarget, targetFaces.get(targetFaceIndex), sourceEmbedding);
+            if (result != workingTarget && !workingTarget.isRecycled()) workingTarget.recycle();
+            return result;
+        } catch (Exception e) {
+            if (!workingTarget.isRecycled()) workingTarget.recycle();
+            throw e;
+        }
     }
 
     public List<FaceDetector.Face> detectTargetFaces(Bitmap targetImage) throws Exception {
@@ -125,8 +138,9 @@ public class FaceFusionProcessor {
 
         Bitmap result = targetImage.copy(Bitmap.Config.ARGB_8888, true);
         for (FaceDetector.Face targetFace : targetFaces) {
-            Bitmap next = swapOne(result, targetFace, sourceEmbedding);
-            if (result != targetImage && !result.isRecycled()) result.recycle();
+            Bitmap previous = result;
+            Bitmap next = swapOne(previous, targetFace, sourceEmbedding);
+            if (next != previous && previous != targetImage && !previous.isRecycled()) previous.recycle();
             result = next;
         }
         return result;
@@ -146,7 +160,8 @@ public class FaceFusionProcessor {
     private Bitmap swapOne(Bitmap targetImage, FaceDetector.Face targetFace, float[] sourceEmbedding) throws Exception {
         FaceLandmarker.Result refined = refine(targetImage, targetFace);
         float[] targetLandmarks = selectStableLandmarks5(targetFace, refined);
-        float[] targetLandmarks68 = refined != null ? refined.landmarks68 : null;
+        float[] targetLandmarks68 = isRefinedGeometryReliable(targetFace, refined)
+            ? refined.landmarks68 : null;
         int qualitySize = FaceSwapper.QUALITY_SIZE;
         Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetLandmarks, qualitySize);
         float[] semanticMask = faceParser != null ? faceParser.createMask(alignedTarget) : null;
@@ -168,9 +183,45 @@ public class FaceFusionProcessor {
     }
 
     /**
-     * Confidence-adaptive geometry fusion. Low-confidence 2DFAN results fall back to the
-     * stable SCRFD anchors; medium-confidence results are blended conservatively; only a
-     * strong 2DFAN result is allowed to dominate the similarity alignment.
+     * Only allow 68-point geometry to control pose/expression masks when the same refined
+     * result is credible against SCRFD. This prevents an unstable 2DFAN result from being
+     * rejected for alignment but still distorting the mask around eyes, mouth or jaw.
+     */
+    private boolean isRefinedGeometryReliable(FaceDetector.Face face, FaceLandmarker.Result refined) {
+        if (refined == null || refined.landmarks68 == null || refined.landmarks68.length < 136
+                || refined.landmarks5 == null || refined.landmarks5.length < 10) {
+            return false;
+        }
+
+        float score = Math.max(0.0f, Math.min(1.0f, refined.score));
+        if (score < 0.55f) return false;
+        if (face.landmarks == null || face.landmarks.length < 10) return score >= 0.75f;
+
+        float eyeDx = face.landmarks[2] - face.landmarks[0];
+        float eyeDy = face.landmarks[3] - face.landmarks[1];
+        float eyeSpan = Math.max(1.0f, (float) Math.sqrt(eyeDx * eyeDx + eyeDy * eyeDy));
+        float displacementSq = 0.0f;
+        float maxDisplacement = 0.0f;
+        for (int i = 0; i < 5; i++) {
+            float dx = refined.landmarks5[i * 2] - face.landmarks[i * 2];
+            float dy = refined.landmarks5[i * 2 + 1] - face.landmarks[i * 2 + 1];
+            float distance = (float) Math.sqrt(dx * dx + dy * dy) / eyeSpan;
+            displacementSq += distance * distance;
+            maxDisplacement = Math.max(maxDisplacement, distance);
+        }
+        float rmsDisplacement = (float) Math.sqrt(displacementSq / 5.0f);
+        boolean reliable = maxDisplacement <= 0.45f && rmsDisplacement <= 0.28f;
+        if (!reliable) {
+            Log.d(TAG, "2DFAN 68-point mask geometry rejected: score=" + score
+                + ", rmsShift=" + rmsDisplacement + ", maxShift=" + maxDisplacement);
+        }
+        return reliable;
+    }
+
+    /**
+     * Confidence plus displacement-aware geometry fusion. Confidence alone is not enough:
+     * refined landmarks that move implausibly far from the stable detector geometry are
+     * restrained even when the landmarker reports a strong score.
      */
     private float[] selectStableLandmarks5(FaceDetector.Face face, FaceLandmarker.Result refined) {
         if (refined == null || refined.landmarks5 == null || refined.landmarks5.length < 10) {
@@ -184,15 +235,41 @@ public class FaceFusionProcessor {
             return face.landmarks;
         }
 
+        float eyeDx = face.landmarks[2] - face.landmarks[0];
+        float eyeDy = face.landmarks[3] - face.landmarks[1];
+        float eyeSpan = Math.max(1.0f, (float) Math.sqrt(eyeDx * eyeDx + eyeDy * eyeDy));
+        float displacementSq = 0.0f;
+        float maxDisplacement = 0.0f;
+        for (int i = 0; i < 5; i++) {
+            float dx = refined.landmarks5[i * 2] - face.landmarks[i * 2];
+            float dy = refined.landmarks5[i * 2 + 1] - face.landmarks[i * 2 + 1];
+            float distance = (float) Math.sqrt(dx * dx + dy * dy) / eyeSpan;
+            displacementSq += distance * distance;
+            maxDisplacement = Math.max(maxDisplacement, distance);
+        }
+        float rmsDisplacement = (float) Math.sqrt(displacementSq / 5.0f);
+
         float confidence = Math.min(1.0f, (score - 0.55f) / 0.30f);
         float refinedWeight = 0.35f + 0.57f * confidence;
+
+        // A single point moving >45% of the detector inter-eye distance, or an overall RMS
+        // shift >28%, is a warning that the refined geometry is likely unstable for alignment.
+        float displacementPenalty = 1.0f;
+        if (maxDisplacement > 0.45f || rmsDisplacement > 0.28f) {
+            float severity = Math.max(maxDisplacement / 0.45f, rmsDisplacement / 0.28f);
+            displacementPenalty = Math.max(0.20f, 1.0f / severity);
+            refinedWeight *= displacementPenalty;
+        }
+        refinedWeight = Math.max(0.12f, Math.min(0.92f, refinedWeight));
         float detectorWeight = 1.0f - refinedWeight;
+
         float[] fused = new float[10];
         for (int i = 0; i < 10; i++) {
             fused[i] = refined.landmarks5[i] * refinedWeight + face.landmarks[i] * detectorWeight;
         }
-        Log.d(TAG, "Fused SCRFD/2DFAN geometry: refinedScore=" + score
-            + ", refinedWeight=" + refinedWeight);
+        Log.d(TAG, "Fused SCRFD/2DFAN geometry: score=" + score
+            + ", rmsShift=" + rmsDisplacement + ", maxShift=" + maxDisplacement
+            + ", penalty=" + displacementPenalty + ", refinedWeight=" + refinedWeight);
         return fused;
     }
 }
