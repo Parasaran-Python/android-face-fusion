@@ -62,8 +62,11 @@ public class SwapperModelSelectorView extends MaterialButton {
     }
 
     private void selectAndPrepare(FaceSwapper.ModelChoice choice) {
-        FaceSwapper.setSelectedModel(getContext(), choice);
-        refreshLabel();
+        FaceSwapper.ModelChoice current = FaceSwapper.getSelectedModel(getContext());
+        if (choice == current) {
+            refreshLabel();
+            return;
+        }
 
         downloading = true;
         setEnabled(false);
@@ -99,6 +102,9 @@ public class SwapperModelSelectorView extends MaterialButton {
                     downloader.getModelFile(ModelDownloader.HYPERSWAP_MODEL);
                 }
 
+                // Commit the selection only after every required file has passed integrity
+                // validation. This avoids a swap racing a partially downloaded model.
+                FaceSwapper.setSelectedModel(getContext(), choice);
                 mainHandler.post(() -> {
                     downloading = false;
                     setEnabled(true);
