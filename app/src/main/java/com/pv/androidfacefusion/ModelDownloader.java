@@ -21,12 +21,18 @@ public class ModelDownloader {
     public static final String DET_MODEL = "det_10g.onnx";
     public static final String REC_MODEL = "arcface_w600k_r50.onnx";
     public static final String HYPERSWAP_MODEL = "hyperswap_1a_256.onnx";
+    public static final String LANDMARKER_MODEL = "2dfan4.onnx";
+    public static final String PARSER_MODEL = "bisenet_resnet_18.onnx";
     public static final String INSWAPPER_MODEL = "inswapper_128.onnx";
 
     private static final String REC_MODEL_SHA256 =
         "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1";
     private static final String HYPERSWAP_MODEL_SHA256 =
         "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add";
+    private static final String LANDMARKER_MODEL_SHA256 =
+        "678c6fa539d52335a31c980feefdf4a6e02d781d83dce00af8a894f114557285";
+    private static final String PARSER_MODEL_SHA256 =
+        "2218b6183c26ca5c83303232d682a536c670c13ea9695f716c777d1f244eefe9";
 
     private static final List<String> DET_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/det_10g.onnx"
@@ -36,6 +42,12 @@ public class ModelDownloader {
     );
     private static final List<String> HYPERSWAP_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1a_256.onnx?download=true"
+    );
+    private static final List<String> LANDMARKER_MODEL_URLS = Arrays.asList(
+        "https://huggingface.co/facefusion/models-3.0.0/resolve/main/2dfan4.onnx?download=true"
+    );
+    private static final List<String> PARSER_MODEL_URLS = Arrays.asList(
+        "https://huggingface.co/facefusion/models-3.1.0/resolve/main/bisenet_resnet_18.onnx?download=true"
     );
     private static final List<String> INSWAPPER_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/inswapper_128.onnx",
@@ -110,6 +122,8 @@ public class ModelDownloader {
         switch (modelName) {
             case REC_MODEL: return REC_MODEL_SHA256;
             case HYPERSWAP_MODEL: return HYPERSWAP_MODEL_SHA256;
+            case LANDMARKER_MODEL: return LANDMARKER_MODEL_SHA256;
+            case PARSER_MODEL: return PARSER_MODEL_SHA256;
             default: return null;
         }
     }
@@ -132,11 +146,14 @@ public class ModelDownloader {
             case DET_MODEL: return 10 * 1024 * 1024L;
             case REC_MODEL: return 160 * 1024 * 1024L;
             case HYPERSWAP_MODEL: return 380 * 1024 * 1024L;
+            case LANDMARKER_MODEL: return 90 * 1024 * 1024L;
+            case PARSER_MODEL: return 50 * 1024 * 1024L;
             case INSWAPPER_MODEL: return 500 * 1024 * 1024L;
             default: return 1L;
         }
     }
 
+    /** Base models required before the UI becomes usable. Quality models load lazily on first swap. */
     public boolean areAllModelsDownloaded() {
         try {
             return isModelDownloaded(DET_MODEL)
@@ -157,7 +174,8 @@ public class ModelDownloader {
 
     public long getTotalModelSize() {
         long total = 0L;
-        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL}) {
+        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL,
+            LANDMARKER_MODEL, PARSER_MODEL, INSWAPPER_MODEL}) {
             File file = new File(context.getFilesDir(), modelName);
             if (file.exists()) total += file.length();
         }
@@ -165,7 +183,8 @@ public class ModelDownloader {
     }
 
     public void clearCache() {
-        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL,
+        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL,
+            LANDMARKER_MODEL, PARSER_MODEL, INSWAPPER_MODEL,
             "w600k_r50.onnx", "hyperswap_1b_256.onnx"}) {
             File file = new File(context.getFilesDir(), modelName);
             if (file.exists() && !file.delete()) Log.w(TAG, "Could not delete cached model: " + modelName);
@@ -177,6 +196,8 @@ public class ModelDownloader {
             case DET_MODEL: return DET_MODEL_URLS;
             case REC_MODEL: return REC_MODEL_URLS;
             case HYPERSWAP_MODEL: return HYPERSWAP_MODEL_URLS;
+            case LANDMARKER_MODEL: return LANDMARKER_MODEL_URLS;
+            case PARSER_MODEL: return PARSER_MODEL_URLS;
             case INSWAPPER_MODEL: return INSWAPPER_MODEL_URLS;
             default: return null;
         }
