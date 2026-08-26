@@ -1,10 +1,6 @@
 name: Android CI
 
 on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
 
 permissions:
@@ -132,20 +128,15 @@ jobs:
           mkdir -p /tmp/debug_extracted /tmp/release_extracted
           unzip -o app/build/outputs/apk/debug/app-debug.apk "lib/*" -d /tmp/debug_extracted
           unzip -o app/build/outputs/apk/release/app-release-unsigned.apk "lib/*" -d /tmp/release_extracted
-          
           for so in $(find /tmp/debug_extracted /tmp/release_extracted -name "*.so"); do
             if [[ "$so" =~ (arm64-v8a|x86_64) ]]; then
-              echo "Checking 64-bit native library: $so"
               non_aligned=$(readelf -W -l "$so" | awk '$1 == "LOAD" { align = $NF; if (align != "0x4000" && align != "0x10000" && align != "0x20000") print align }')
               if [ -n "$non_aligned" ]; then
                 echo "::error file=$so::Found non-16KB aligned LOAD segments: $non_aligned"
                 exit 1
-              else
-                echo "  ✓ All LOAD segments >= 16 KB (0x4000+) aligned."
               fi
             fi
           done
-          echo "All 64-bit native libraries verified for 16 KB page alignment!"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v7
