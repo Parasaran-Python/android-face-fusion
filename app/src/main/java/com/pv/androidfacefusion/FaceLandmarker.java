@@ -20,14 +20,17 @@ import ai.onnxruntime.OrtSession;
 public final class FaceLandmarker {
     private static final String TAG = "FaceLandmarker";
     private static final int INPUT_SIZE = 256;
+    private static final float MIN_LANDMARK_SCORE = 0.5f;
 
     public static final class Result {
         public final float[] landmarks68;
         public final float[] landmarks5;
+        public final float score;
 
-        Result(float[] landmarks68, float[] landmarks5) {
+        Result(float[] landmarks68, float[] landmarks5, float score) {
             this.landmarks68 = landmarks68;
             this.landmarks5 = landmarks5;
+            this.score = score;
         }
     }
 
@@ -79,6 +82,12 @@ public final class FaceLandmarker {
                 float[] local68 = readLandmarkOutput(outputs.get(0).getValue());
                 if (local68 == null) return null;
 
+                float score = outputs.size() > 1 ? readHeatmapScore(outputs.get(1).getValue()) : 0.0f;
+                if (score < MIN_LANDMARK_SCORE) {
+                    Log.d(TAG, "Ignoring low-confidence refined landmarks: score=" + score);
+                    return null;
+                }
+
                 float[] image68 = new float[136];
                 for (int i = 0; i < 68; i++) {
                     float x256 = local68[i * 2] * 4.0f;
@@ -88,7 +97,7 @@ public final class FaceLandmarker {
                 }
                 float[] refined5 = convert68To5(image68);
                 if (!isValid(refined5, image.getWidth(), image.getHeight())) return null;
-                return new Result(image68, refined5);
+                return new Result(image68, refined5, score);
             }
         } catch (Exception e) {
             Log.w(TAG, "Landmark refinement failed; using detector landmarks", e);
@@ -105,7 +114,6 @@ public final class FaceLandmarker {
         float[] output = new float[plane * 3];
         for (int i = 0; i < plane; i++) {
             int pixel = pixels[i];
-            // FaceFusion feeds 2DFAN4 from its OpenCV/BGR vision frame without channel reversal.
             output[i] = (pixel & 0xFF) / 255.0f;
             output[plane + i] = ((pixel >> 8) & 0xFF) / 255.0f;
             output[plane * 2 + i] = ((pixel >> 16) & 0xFF) / 255.0f;
@@ -135,8 +143,8 @@ public final class FaceLandmarker {
                 return result;
             }
             if (data.length == 1 && data[0].length >= 136) {
+                int stride = data[0].length >= 204 ? 3 : 2;
                 for (int i = 0; i < 68; i++) {
-                    int stride = data[0].length >= 204 ? 3 : 2;
                     result[i * 2] = data[0][i * stride];
                     result[i * 2 + 1] = data[0][i * stride + 1];
                 }
@@ -145,6 +153,25 @@ public final class FaceLandmarker {
         }
         Log.w(TAG, "Unexpected 2DFAN4 landmark output type: " + value.getClass().getName());
         return null;
+    }
+
+    private float readHeatmapScore(Object value) {
+        if (!(value instanceof float[][][][])) return 0.0f;
+        float[][][][] heatmap = (float[][][][]) value;
+        if (heatmap.length < 1 || heatmap[0].length < 68) return 0.0f;
+        double sum = 0.0;
+        for (int i = 0; i < 68; i++) {
+            float max = Float.NEGATIVE_INFINITY;
+            for (int y = 0; y < heatmap[0][i].length; y++) {
+                for (int x = 0; x < heatmap[0][i][y].length; x++) {
+                    max = Math.max(max, heatmap[0][i][y][x]);
+                }
+            }
+            if (!Float.isFinite(max)) return 0.0f;
+            sum += max;
+        }
+        float rawMean = (float) (sum / 68.0);
+        return Math.max(0.0f, Math.min(1.0f, rawMean / 0.9f));
     }
 
     private float[] convert68To5(float[] points) {
@@ -179,9 +206,7 @@ public final class FaceLandmarker {
             float x = landmarks[i];
             float y = landmarks[i + 1];
             if (!Float.isFinite(x) || !Float.isFinite(y)) return false;
-            if (x < -width * 0.25f || x > width * 1.25f || y < -height * 0.25f || y > height * 1.25f) {
-                return false;
-            }
+            if (x < -width * 0.25f || x > width * 1.25f || y < -height * 0.25f || y > height * 1.25f) return false;
         }
         return true;
     }
