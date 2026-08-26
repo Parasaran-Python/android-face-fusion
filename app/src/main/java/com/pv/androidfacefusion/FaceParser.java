@@ -59,22 +59,28 @@ public final class FaceParser {
                 int height = logits[0][0].length;
                 int width = logits[0][0][0].length;
                 float[] mask = new float[width * height];
+
+                // Use the full probability distribution instead of an argmax class label. Pixels
+                // near skin/hair/eye/lip boundaries become naturally fractional rather than hard cuts.
                 for (int y = 0; y < height; y++) {
                     for (int x = 0; x < width; x++) {
-                        int bestClass = 0;
-                        float bestScore = Float.NEGATIVE_INFINITY;
+                        float maxLogit = Float.NEGATIVE_INFINITY;
                         for (int c = 0; c < classes; c++) {
-                            float score = logits[0][c][y][x];
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestClass = c;
-                            }
+                            maxLogit = Math.max(maxLogit, logits[0][c][y][x]);
                         }
-                        mask[y * width + x] = regionBlendWeight(bestClass);
+                        double probabilitySum = 0.0;
+                        double weightedBlend = 0.0;
+                        for (int c = 0; c < classes; c++) {
+                            double probability = Math.exp(Math.max(-20.0, logits[0][c][y][x] - maxLogit));
+                            probabilitySum += probability;
+                            weightedBlend += probability * regionBlendWeight(c);
+                        }
+                        mask[y * width + x] = probabilitySum > 0.0
+                            ? clamp01((float) (weightedBlend / probabilitySum)) : 0.0f;
                     }
                 }
                 if (width == outputWidth && height == outputHeight) return mask;
-                return resizeMaskNearest(mask, width, height, outputWidth, outputHeight);
+                return resizeMaskBilinear(mask, width, height, outputWidth, outputHeight);
             }
         } catch (Exception e) {
             Log.w(TAG, "Semantic face parsing failed; using geometric blend mask", e);
@@ -85,8 +91,8 @@ public final class FaceParser {
     }
 
     /**
-     * Graduated semantic blending instead of binary cut-outs. Skin/brows/nose/lips carry
-     * identity strongly, while the target's gaze and mouth interior remain dominant.
+     * Base semantic identity weights. Probability mixing and bilinear resizing soften these
+     * values at real class boundaries instead of producing a binary face-shaped cut-out.
      */
     private float regionBlendWeight(int label) {
         switch (label) {
@@ -99,11 +105,13 @@ public final class FaceParser {
                 return 1.0f;
             case 4:  // left eye
             case 5:  // right eye
-                return 0.14f;
+                return 0.20f;
             case 11: // mouth cavity / teeth
-                return 0.08f;
+                return 0.12f;
+            case 6:  // glasses: retain mostly target while allowing a tiny transition
+                return 0.04f;
             default:
-                // Preserve target glasses, ears, neck, hair, hat, clothing and background.
+                // Preserve target ears, neck, hair, hat, clothing and background.
                 return 0.0f;
         }
     }
@@ -127,16 +135,32 @@ public final class FaceParser {
         return output;
     }
 
-    private float[] resizeMaskNearest(float[] source, int sourceWidth, int sourceHeight, int width, int height) {
+    private float[] resizeMaskBilinear(float[] source, int sourceWidth, int sourceHeight, int width, int height) {
         float[] result = new float[width * height];
+        float xScale = width > 1 ? (float) (sourceWidth - 1) / (width - 1) : 0.0f;
+        float yScale = height > 1 ? (float) (sourceHeight - 1) / (height - 1) : 0.0f;
         for (int y = 0; y < height; y++) {
-            int sy = Math.min(sourceHeight - 1, y * sourceHeight / height);
+            float sy = y * yScale;
+            int y0 = (int) sy;
+            int y1 = Math.min(sourceHeight - 1, y0 + 1);
+            float fy = sy - y0;
             for (int x = 0; x < width; x++) {
-                int sx = Math.min(sourceWidth - 1, x * sourceWidth / width);
-                result[y * width + x] = source[sy * sourceWidth + sx];
+                float sx = x * xScale;
+                int x0 = (int) sx;
+                int x1 = Math.min(sourceWidth - 1, x0 + 1);
+                float fx = sx - x0;
+                float top = source[y0 * sourceWidth + x0] * (1.0f - fx)
+                    + source[y0 * sourceWidth + x1] * fx;
+                float bottom = source[y1 * sourceWidth + x0] * (1.0f - fx)
+                    + source[y1 * sourceWidth + x1] * fx;
+                result[y * width + x] = clamp01(top * (1.0f - fy) + bottom * fy);
             }
         }
         return result;
+    }
+
+    private float clamp01(float value) {
+        return Math.max(0.0f, Math.min(1.0f, value));
     }
 
     public void close() {
