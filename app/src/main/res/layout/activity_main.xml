@@ -43,13 +43,13 @@
                         android:textColor="?attr/colorPrimary"
                         android:gravity="center" />
 
-                    <TextView
+                    <com.pv.androidfacefusion.SwapperModelSelectorView
+                        android:id="@+id/swapperModelSelector"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Swap faces between images using AI"
-                        android:textSize="14sp"
-                        android:gravity="center"
-                        android:layout_marginTop="4dp" />
+                        android:layout_marginTop="8dp"
+                        android:text="Quality model: HyperSwap 1a" />
 
                 </LinearLayout>
 
