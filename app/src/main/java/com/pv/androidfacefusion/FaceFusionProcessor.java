@@ -134,7 +134,7 @@ public class FaceFusionProcessor {
 
     private float[] getSourceEmbedding(Bitmap sourceImage, FaceDetector.Face sourceFace) throws Exception {
         FaceLandmarker.Result refined = refine(sourceImage, sourceFace);
-        float[] sourceLandmarks = refined != null ? refined.landmarks5 : sourceFace.landmarks;
+        float[] sourceLandmarks = selectStableLandmarks5(sourceFace, refined);
         Bitmap alignedSource = SwapperImageUtils.alignArcFace112(sourceImage, sourceLandmarks);
         try {
             return faceEmbedder.getEmbedding(alignedSource);
@@ -145,7 +145,7 @@ public class FaceFusionProcessor {
 
     private Bitmap swapOne(Bitmap targetImage, FaceDetector.Face targetFace, float[] sourceEmbedding) throws Exception {
         FaceLandmarker.Result refined = refine(targetImage, targetFace);
-        float[] targetLandmarks = refined != null ? refined.landmarks5 : targetFace.landmarks;
+        float[] targetLandmarks = selectStableLandmarks5(targetFace, refined);
         float[] targetLandmarks68 = refined != null ? refined.landmarks68 : null;
         int qualitySize = FaceSwapper.QUALITY_SIZE;
         Bitmap alignedTarget = SwapperImageUtils.alignFace(targetImage, targetLandmarks, qualitySize);
@@ -165,5 +165,28 @@ public class FaceFusionProcessor {
 
     private FaceLandmarker.Result refine(Bitmap image, FaceDetector.Face face) {
         return faceLandmarker != null ? faceLandmarker.refine(image, face) : null;
+    }
+
+    /**
+     * Confidence-adaptive geometry fusion. SCRFD supplies very stable coarse anchors while
+     * 2DFAN supplies pose/expression accuracy. Keeping a small detector contribution prevents
+     * a single refined point from pulling the whole similarity crop off-axis on difficult faces.
+     */
+    private float[] selectStableLandmarks5(FaceDetector.Face face, FaceLandmarker.Result refined) {
+        if (refined == null || refined.landmarks5 == null || refined.landmarks5.length < 10) {
+            return face.landmarks;
+        }
+        if (face.landmarks == null || face.landmarks.length < 10) return refined.landmarks5;
+
+        float score = Math.max(0.0f, Math.min(1.0f, refined.score));
+        float refinedWeight = 0.72f + 0.23f * score;
+        float detectorWeight = 1.0f - refinedWeight;
+        float[] fused = new float[10];
+        for (int i = 0; i < 10; i++) {
+            fused[i] = refined.landmarks5[i] * refinedWeight + face.landmarks[i] * detectorWeight;
+        }
+        Log.d(TAG, "Fused SCRFD/2DFAN geometry: refinedScore=" + score
+            + ", refinedWeight=" + refinedWeight);
+        return fused;
     }
 }
