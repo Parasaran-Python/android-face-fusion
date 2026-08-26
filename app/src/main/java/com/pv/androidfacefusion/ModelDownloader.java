@@ -5,41 +5,40 @@ import android.util.Log;
 
 import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Handles downloading and caching of ONNX models with resumable downloading,
- * automatic retries, HTTP redirect tracking, and mirror fallback support.
- */
+/** Downloads, validates and caches the ONNX models used by the app. */
 public class ModelDownloader {
     private static final String TAG = "ModelDownloader";
 
     public static final String DET_MODEL = "det_10g.onnx";
-    // Use FaceFusion's exact ArcFace recognizer and a distinct cache filename so
-    // existing installs cannot silently reuse the older InsightFace download.
     public static final String REC_MODEL = "arcface_w600k_r50.onnx";
     public static final String HYPERSWAP_MODEL = "hyperswap_1b_256.onnx";
     public static final String INSWAPPER_MODEL = "inswapper_128.onnx";
 
+    // Official FaceFusion model SHA-256 values. These stop a truncated/wrong cached
+    // model being accepted merely because it happens to be large enough.
+    private static final String REC_MODEL_SHA256 =
+        "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1";
+    private static final String HYPERSWAP_MODEL_SHA256 =
+        "5124031789c42f71b9558fb71954ef7aedb6da7ed9fac79293e23c61a792a73e";
+
     private static final List<String> DET_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/det_10g.onnx"
     );
-
     private static final List<String> REC_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/facefusion/models-3.0.0/resolve/main/arcface_w600k_r50.onnx?download=true"
     );
-
-    // Primary Android upgrade: FaceFusion HyperSwap 1b 256 (~403 MB).
     private static final List<String> HYPERSWAP_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/facefusion/models-3.3.0/resolve/main/hyperswap_1b_256.onnx?download=true"
     );
-
-    // Preserved as an automatic compatibility fallback.
     private static final List<String> INSWAPPER_MODEL_URLS = Arrays.asList(
         "https://huggingface.co/leonelhs/insightface/resolve/main/inswapper_128.onnx",
         "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx"
@@ -65,62 +64,97 @@ public class ModelDownloader {
     public File getModelFile(String modelName) throws Exception {
         File modelFile = new File(context.getFilesDir(), modelName);
 
-        if (modelFile.exists() && modelFile.length() > 0) {
-            long minExpectedSize = getMinExpectedSize(modelName);
-            if (modelFile.length() >= minExpectedSize) {
-                Log.d(TAG, modelName + " already exists in cache (" + (modelFile.length() / (1024 * 1024)) + " MB)");
+        if (modelFile.exists() && modelFile.length() >= getMinExpectedSize(modelName)) {
+            if (validateKnownHash(modelName, modelFile)) {
+                Log.i(TAG, modelName + " cache validated (" + modelFile.length() + " bytes)");
                 return modelFile;
             }
-            Log.w(TAG, modelName + " exists but incomplete (" + modelFile.length() + " bytes), resuming download...");
+            Log.w(TAG, modelName + " failed integrity validation; deleting cached copy");
+            if (!modelFile.delete()) {
+                throw new Exception("Invalid cached model could not be deleted: " + modelName);
+            }
         }
 
         List<String> urls = getUrlsForModel(modelName);
-        if (urls == null || urls.isEmpty()) {
-            throw new Exception("Unknown model: " + modelName);
-        }
+        if (urls == null || urls.isEmpty()) throw new Exception("Unknown model: " + modelName);
 
         Exception lastException = null;
         for (String url : urls) {
             try {
-                Log.d(TAG, "Downloading " + modelName + " from " + url);
                 downloadModelWithRetry(url, modelFile, modelName);
+                if (!validateKnownHash(modelName, modelFile)) {
+                    if (modelFile.exists()) modelFile.delete();
+                    throw new Exception("Downloaded model failed SHA-256 validation: " + modelName);
+                }
                 return modelFile;
             } catch (Exception e) {
-                Log.e(TAG, "Failed downloading from " + url + ": " + e.getMessage());
+                Log.e(TAG, "Failed downloading " + modelName + " from " + url, e);
                 lastException = e;
             }
         }
 
-        if (callback != null) {
-            callback.onError(modelName, lastException != null ? lastException.getMessage() : "Unknown error");
-        }
-        throw new Exception("Failed to download " + modelName + " after trying all mirrors: "
+        if (callback != null) callback.onError(modelName,
+            lastException != null ? lastException.getMessage() : "Unknown error");
+        throw new Exception("Failed to download " + modelName + ": "
             + (lastException != null ? lastException.getMessage() : "Unknown error"));
+    }
+
+    private boolean validateKnownHash(String modelName, File file) throws Exception {
+        String expected = getExpectedSha256(modelName);
+        if (expected == null) return file.length() >= getMinExpectedSize(modelName);
+        String actual = sha256(file);
+        boolean valid = expected.equalsIgnoreCase(actual);
+        if (!valid) Log.e(TAG, modelName + " SHA-256 mismatch. Expected=" + expected + " actual=" + actual);
+        return valid;
+    }
+
+    private String getExpectedSha256(String modelName) {
+        switch (modelName) {
+            case REC_MODEL: return REC_MODEL_SHA256;
+            case HYPERSWAP_MODEL: return HYPERSWAP_MODEL_SHA256;
+            default: return null;
+        }
+    }
+
+    private String sha256(File file) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read);
+        }
+        byte[] bytes = digest.digest();
+        StringBuilder hex = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) hex.append(String.format("%02x", b & 0xff));
+        return hex.toString();
     }
 
     private long getMinExpectedSize(String modelName) {
         switch (modelName) {
             case DET_MODEL: return 10 * 1024 * 1024L;
-            case REC_MODEL: return 100 * 1024 * 1024L;
+            case REC_MODEL: return 160 * 1024 * 1024L;
             case HYPERSWAP_MODEL: return 380 * 1024 * 1024L;
             case INSWAPPER_MODEL: return 500 * 1024 * 1024L;
             default: return 1L;
         }
     }
 
-    /**
-     * Startup requires detector + FaceFusion ArcFace recognizer + HyperSwap.
-     * INSwapper is downloaded only if HyperSwap initialization fails.
-     */
     public boolean areAllModelsDownloaded() {
-        return isModelDownloaded(DET_MODEL)
-            && isModelDownloaded(REC_MODEL)
-            && isModelDownloaded(HYPERSWAP_MODEL);
+        try {
+            return isModelDownloaded(DET_MODEL)
+                && isModelDownloaded(REC_MODEL)
+                && isModelDownloaded(HYPERSWAP_MODEL);
+        } catch (Exception e) {
+            Log.w(TAG, "Model integrity check failed", e);
+            return false;
+        }
     }
 
-    private boolean isModelDownloaded(String modelName) {
+    private boolean isModelDownloaded(String modelName) throws Exception {
         File file = new File(context.getFilesDir(), modelName);
-        return file.exists() && file.length() >= getMinExpectedSize(modelName);
+        return file.exists()
+            && file.length() >= getMinExpectedSize(modelName)
+            && validateKnownHash(modelName, file);
     }
 
     public long getTotalModelSize() {
@@ -133,16 +167,9 @@ public class ModelDownloader {
     }
 
     public void clearCache() {
-        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL}) {
+        for (String modelName : new String[]{DET_MODEL, REC_MODEL, HYPERSWAP_MODEL, INSWAPPER_MODEL, "w600k_r50.onnx"}) {
             File file = new File(context.getFilesDir(), modelName);
-            if (file.exists() && !file.delete()) {
-                Log.w(TAG, "Could not delete cached model: " + modelName);
-            }
-        }
-        // Also remove the legacy recognizer cache from older test builds.
-        File legacyRecognizer = new File(context.getFilesDir(), "w600k_r50.onnx");
-        if (legacyRecognizer.exists() && !legacyRecognizer.delete()) {
-            Log.w(TAG, "Could not delete legacy cached recognizer: w600k_r50.onnx");
+            if (file.exists() && !file.delete()) Log.w(TAG, "Could not delete cached model: " + modelName);
         }
     }
 
@@ -156,29 +183,19 @@ public class ModelDownloader {
         }
     }
 
-    private void downloadModelWithRetry(String initialUrlString, File outputFile, String modelName) throws Exception {
-        int maxRetries = 10;
+    private void downloadModelWithRetry(String initialUrl, File outputFile, String modelName) throws Exception {
         Exception lastException = null;
-
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        for (int attempt = 1; attempt <= 5; attempt++) {
             try {
-                downloadSingleAttempt(initialUrlString, outputFile, modelName);
+                downloadSingleAttempt(initialUrl, outputFile, modelName);
                 return;
             } catch (Exception e) {
                 lastException = e;
-                Log.w(TAG, "Download attempt " + attempt + "/" + maxRetries + " failed for " + modelName + ": " + e.getMessage());
-                if (attempt < maxRetries) {
-                    try {
-                        Thread.sleep(2000L * attempt);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        throw new Exception("Model download interrupted", interrupted);
-                    }
-                }
+                Log.w(TAG, "Download attempt " + attempt + "/5 failed for " + modelName + ": " + e.getMessage());
+                if (attempt < 5) Thread.sleep(1500L * attempt);
             }
         }
-
-        throw new Exception("Failed after " + maxRetries + " attempts: "
+        throw new Exception("Failed after 5 attempts: "
             + (lastException != null ? lastException.getMessage() : "Unknown error"));
     }
 
@@ -215,7 +232,6 @@ public class ModelDownloader {
             while ((count = input.read(data)) != -1) {
                 output.write(data, 0, count);
                 downloadedBytes += count;
-
                 if (totalLength > 0 && callback != null) {
                     int progress = (int) (downloadedBytes * 100 / totalLength);
                     if (progress != lastProgress && progress % 2 == 0) {
@@ -229,9 +245,7 @@ public class ModelDownloader {
             if (outputFile.length() < getMinExpectedSize(modelName)) {
                 throw new Exception("Downloaded file is smaller than expected: " + outputFile.length() + " bytes");
             }
-
             if (callback != null) callback.onComplete(modelName);
-            Log.d(TAG, "Downloaded " + modelName + " successfully (" + downloadedBytes + " bytes)");
         } finally {
             connection.disconnect();
         }
@@ -239,10 +253,7 @@ public class ModelDownloader {
 
     private HttpURLConnection openConnectionWithRedirects(String urlString, long existingLength) throws Exception {
         String currentUrl = urlString;
-        int redirects = 0;
-        int maxRedirects = 10;
-
-        while (redirects < maxRedirects) {
+        for (int redirects = 0; redirects < 10; redirects++) {
             URL url = new URL(currentUrl);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setInstanceFollowRedirects(false);
@@ -252,32 +263,20 @@ public class ModelDownloader {
             conn.setRequestProperty("Accept", "*/*");
             conn.setRequestProperty("Connection", "keep-alive");
             conn.setRequestProperty("Accept-Encoding", "identity");
-            if (existingLength > 0) {
-                conn.setRequestProperty("Range", "bytes=" + existingLength + "-");
-            }
+            if (existingLength > 0) conn.setRequestProperty("Range", "bytes=" + existingLength + "-");
 
             conn.connect();
             int code = conn.getResponseCode();
-            if (code == HttpURLConnection.HTTP_MOVED_PERM
-                || code == HttpURLConnection.HTTP_MOVED_TEMP
-                || code == HttpURLConnection.HTTP_SEE_OTHER
-                || code == 307 || code == 308) {
+            if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                 String location = conn.getHeaderField("Location");
                 conn.disconnect();
-                if (location == null || location.isEmpty()) {
-                    throw new Exception("HTTP redirect with no Location header");
-                }
-                if (!location.startsWith("http")) {
-                    URL base = new URL(currentUrl);
-                    location = new URL(base, location).toExternalForm();
-                }
+                if (location == null || location.isEmpty()) throw new Exception("Redirect without Location header");
+                if (!location.startsWith("http")) location = new URL(new URL(currentUrl), location).toExternalForm();
                 currentUrl = location;
-                redirects++;
             } else {
                 return conn;
             }
         }
-
         throw new Exception("Too many HTTP redirects");
     }
 }
