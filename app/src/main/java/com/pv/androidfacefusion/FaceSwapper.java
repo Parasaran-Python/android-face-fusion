@@ -60,8 +60,6 @@ public class FaceSwapper {
         imageInputName = null;
         embeddingInputName = null;
 
-        // Prefer FaceFusion's canonical HyperSwap names. Fall back to shapes only
-        // for model revisions that retain the same contract under different names.
         if (session.getInputInfo().containsKey("target")) imageInputName = "target";
         if (session.getInputInfo().containsKey("source")) embeddingInputName = "source";
 
@@ -139,7 +137,6 @@ public class FaceSwapper {
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
         float[] output = new float[3 * pixels.length];
 
-        // FaceFusion prepare_crop_frame: RGB / 255, then (x - 0.5) / 0.5.
         for (int i = 0; i < pixels.length; i++) {
             int pixel = pixels[i];
             output[i] = ((((pixel >> 16) & 0xFF) / 255.0f) - 0.5f) / 0.5f;
@@ -159,20 +156,44 @@ public class FaceSwapper {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         int[] pixels = new int[width * height];
 
-        // FaceFusion normalize_crop_frame for HyperSwap: output * 0.5 + 0.5,
-        // clip to [0,1]. Android Bitmaps are RGB, so no OpenCV BGR conversion is needed.
+        float min = Float.POSITIVE_INFINITY;
+        float max = Float.NEGATIVE_INFINITY;
+        for (int c = 0; c < 3; c++) {
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    float value = data[c][y][x];
+                    if (!Float.isFinite(value)) {
+                        bitmap.recycle();
+                        throw new OrtException("HyperSwap returned NaN/Infinity output");
+                    }
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                }
+            }
+        }
+
+        // HyperSwap has a documented CPU float-normalization quirk. Standard
+        // FaceFusion output is normalized (roughly [-1,1]), but CPU runtimes can
+        // return values already in pixel scale. Only denormalize the normalized case.
+        boolean normalizedOutput = min < 0.0f || max <= 1.5f;
+        Log.i(TAG, "HyperSwap output range: min=" + min + ", max=" + max
+            + ", normalized=" + normalizedOutput);
+
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 float rf = data[0][y][x];
                 float gf = data[1][y][x];
                 float bf = data[2][y][x];
-                if (!Float.isFinite(rf) || !Float.isFinite(gf) || !Float.isFinite(bf)) {
-                    bitmap.recycle();
-                    throw new OrtException("HyperSwap returned NaN/Infinity output");
+
+                if (normalizedOutput) {
+                    rf = (rf * 0.5f + 0.5f) * 255.0f;
+                    gf = (gf * 0.5f + 0.5f) * 255.0f;
+                    bf = (bf * 0.5f + 0.5f) * 255.0f;
                 }
-                int r = clampToByte((rf * 0.5f + 0.5f) * 255.0f);
-                int g = clampToByte((gf * 0.5f + 0.5f) * 255.0f);
-                int b = clampToByte((bf * 0.5f + 0.5f) * 255.0f);
+
+                int r = clampToByte(rf);
+                int g = clampToByte(gf);
+                int b = clampToByte(bf);
                 pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
             }
         }
