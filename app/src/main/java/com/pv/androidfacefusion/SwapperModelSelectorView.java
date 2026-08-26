@@ -9,7 +9,7 @@ import android.widget.Toast;
 
 import com.google.android.material.button.MaterialButton;
 
-/** Small self-contained selector that persists the chosen face swapper and downloads it on demand. */
+/** Compact quality selector for swapper model plus identity strength. */
 public class SwapperModelSelectorView extends MaterialButton {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile boolean downloading;
@@ -33,16 +33,32 @@ public class SwapperModelSelectorView extends MaterialButton {
         setAllCaps(false);
         refreshLabel();
         setOnClickListener(v -> {
-            if (!downloading) showSelector();
+            if (!downloading) showQualityMenu();
         });
     }
 
     private void refreshLabel() {
-        FaceSwapper.ModelChoice choice = FaceSwapper.getSelectedModel(getContext());
-        setText("Quality model: " + choice.displayName);
+        FaceSwapper.ModelChoice model = FaceSwapper.getSelectedModel(getContext());
+        IdentityStrengthSettings.Level strength = IdentityStrengthSettings.get(getContext());
+        setText("Quality: " + model.displayName + " • " + strength.displayName + " identity");
     }
 
-    private void showSelector() {
+    private void showQualityMenu() {
+        String[] items = {
+            "Face swap model\n" + FaceSwapper.getSelectedModel(getContext()).displayName,
+            "Identity strength\n" + IdentityStrengthSettings.get(getContext()).displayName
+        };
+        new AlertDialog.Builder(getContext())
+            .setTitle("Quality settings")
+            .setItems(items, (dialog, which) -> {
+                if (which == 0) showModelSelector();
+                else showIdentitySelector();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showModelSelector() {
         FaceSwapper.ModelChoice[] choices = FaceSwapper.ModelChoice.values();
         FaceSwapper.ModelChoice current = FaceSwapper.getSelectedModel(getContext());
         String[] labels = new String[choices.length];
@@ -57,6 +73,28 @@ public class SwapperModelSelectorView extends MaterialButton {
             .setTitle("Choose face swap model")
             .setSingleChoiceItems(labels, checked, (dialog, which) -> selected[0] = which)
             .setPositiveButton("Use model", (dialog, which) -> selectAndPrepare(choices[selected[0]]))
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showIdentitySelector() {
+        IdentityStrengthSettings.Level[] levels = IdentityStrengthSettings.Level.values();
+        IdentityStrengthSettings.Level current = IdentityStrengthSettings.get(getContext());
+        String[] labels = new String[levels.length];
+        int checked = 0;
+        for (int i = 0; i < levels.length; i++) {
+            labels[i] = levels[i].displayName + "\n" + levels[i].description;
+            if (levels[i] == current) checked = i;
+        }
+
+        final int[] selected = {checked};
+        new AlertDialog.Builder(getContext())
+            .setTitle("Identity strength")
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> selected[0] = which)
+            .setPositiveButton("Use strength", (dialog, which) -> {
+                IdentityStrengthSettings.set(getContext(), levels[selected[0]]);
+                refreshLabel();
+            })
             .setNegativeButton("Cancel", null)
             .show();
     }
@@ -102,8 +140,7 @@ public class SwapperModelSelectorView extends MaterialButton {
                     downloader.getModelFile(ModelDownloader.HYPERSWAP_MODEL);
                 }
 
-                // Commit the selection only after every required file has passed integrity
-                // validation. This avoids a swap racing a partially downloaded model.
+                // Commit the selection only after every required file has passed integrity validation.
                 FaceSwapper.setSelectedModel(getContext(), choice);
                 mainHandler.post(() -> {
                     downloading = false;
