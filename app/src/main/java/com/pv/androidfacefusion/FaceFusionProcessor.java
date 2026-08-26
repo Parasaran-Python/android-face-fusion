@@ -17,8 +17,36 @@ public class FaceFusionProcessor {
     private final FaceLandmarker faceLandmarker;
     private final FaceParser faceParser;
 
+    /**
+     * Existing construction path used by the app. Quality helpers are additive and fail-safe:
+     * if either optional model cannot load, the proven detector/ArcFace/HyperSwap path remains usable.
+     */
     public FaceFusionProcessor(FaceDetector detector, FaceEmbedder embedder, FaceSwapper swapper) {
-        this(detector, embedder, swapper, null, null);
+        this.faceDetector = detector;
+        this.faceEmbedder = embedder;
+        this.faceSwapper = swapper;
+
+        FaceLandmarker landmarker = null;
+        try {
+            landmarker = new FaceLandmarker(swapper.getAppContext());
+            landmarker.initialize();
+        } catch (Exception e) {
+            Log.w(TAG, "68-point landmark refinement unavailable; detector landmarks remain active", e);
+            if (landmarker != null) landmarker.close();
+            landmarker = null;
+        }
+        this.faceLandmarker = landmarker;
+
+        FaceParser parser = null;
+        try {
+            parser = new FaceParser(swapper.getAppContext());
+            parser.initialize();
+        } catch (Exception e) {
+            Log.w(TAG, "Semantic face parser unavailable; geometric blend fallback remains active", e);
+            if (parser != null) parser.close();
+            parser = null;
+        }
+        this.faceParser = parser;
     }
 
     public FaceFusionProcessor(FaceDetector detector, FaceEmbedder embedder, FaceSwapper swapper,
