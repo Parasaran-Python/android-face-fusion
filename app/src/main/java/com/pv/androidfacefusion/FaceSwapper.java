@@ -33,6 +33,10 @@ public class FaceSwapper {
         this.env = OrtEnvironment.getEnvironment();
     }
 
+    Context getAppContext() {
+        return context;
+    }
+
     public void initialize() throws Exception {
         ModelDownloader downloader = new ModelDownloader(context);
         Log.i(TAG, "Loading HyperSwap 1a 256...");
@@ -249,9 +253,6 @@ public class FaceSwapper {
             }
         }
 
-        // HyperSwap has a documented CPU float-normalization quirk. Standard
-        // FaceFusion output is normalized (roughly [-1,1]), but CPU runtimes can
-        // return values already in pixel scale. Only denormalize the normalized case.
         boolean normalizedOutput = min < 0.0f || max <= 1.5f;
         Log.i(TAG, "HyperSwap output range: min=" + min + ", max=" + max
             + ", normalized=" + normalizedOutput);
