@@ -4,11 +4,9 @@ import android.graphics.Bitmap;
 
 import org.opencv.android.OpenCVLoader;
 import org.opencv.android.Utils;
-import org.opencv.calib3d.Calib3d;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
@@ -41,8 +39,8 @@ public final class SwapperImageUtils {
             return Bitmap.createScaledBitmap(image, 112, 112, true);
         }
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(
-            unpackLandmarks(landmarks), scaledTemplate(ARCFACE_112_V2_NORMALIZED, 112), 100.0);
+        Mat affine = estimateSimilarityTransform(
+            unpackLandmarks(landmarks), scaledTemplate(ARCFACE_112_V2_NORMALIZED, 112));
         Mat source = new Mat();
         Mat aligned = new Mat();
         try {
@@ -64,8 +62,8 @@ public final class SwapperImageUtils {
             return Bitmap.createScaledBitmap(image, targetSize, targetSize, true);
         }
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(
-            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, targetSize), 3.0);
+        Mat affine = estimateSimilarityTransform(
+            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, targetSize));
         Mat source = new Mat();
         Mat aligned = new Mat();
         try {
@@ -87,17 +85,16 @@ public final class SwapperImageUtils {
             return targetImage.copy(Bitmap.Config.ARGB_8888, true);
         }
         ensureOpenCv();
-        Mat affine = estimateAffineTransform(
-            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize), 3.0);
+        Mat affine = estimateSimilarityTransform(
+            unpackLandmarks(landmarks), scaledTemplate(HYPERSWAP_256_NORMALIZED, faceSize));
         int width = targetImage.getWidth();
         int height = targetImage.getHeight();
-        Mat inverse = new Mat();
+        Mat inverse = invertAffineTransform(affine);
         Mat swappedMat = new Mat();
         Mat warpedFaceMat = new Mat();
         Mat cropMask = Mat.zeros(faceSize, faceSize, CvType.CV_32FC1);
         Mat warpedMask = new Mat();
         try {
-            Imgproc.invertAffineTransform(affine, inverse);
             Utils.bitmapToMat(swappedFace, swappedMat);
             Imgproc.warpAffine(swappedMat, warpedFaceMat, inverse, new Size(width, height),
                 Imgproc.INTER_LANCZOS4, Core.BORDER_CONSTANT, new Scalar(127.5, 127.5, 127.5, 255));
@@ -175,29 +172,74 @@ public final class SwapperImageUtils {
         }
     }
 
-    private static Mat estimateAffineTransform(float[][] src, float[][] dst, double ransacThreshold) {
-        Point[] srcPoints = new Point[src.length];
-        Point[] dstPoints = new Point[dst.length];
-        for (int i = 0; i < src.length; i++) {
-            srcPoints[i] = new Point(src[i][0], src[i][1]);
-            dstPoints[i] = new Point(dst[i][0], dst[i][1]);
+    /** Least-squares 2D similarity transform, source -> destination. */
+    private static Mat estimateSimilarityTransform(float[][] src, float[][] dst) {
+        int n = src.length;
+        double srcCx = 0.0, srcCy = 0.0, dstCx = 0.0, dstCy = 0.0;
+        for (int i = 0; i < n; i++) {
+            srcCx += src[i][0];
+            srcCy += src[i][1];
+            dstCx += dst[i][0];
+            dstCy += dst[i][1];
         }
-        MatOfPoint2f srcMat = new MatOfPoint2f(srcPoints);
-        MatOfPoint2f dstMat = new MatOfPoint2f(dstPoints);
-        Mat inliers = new Mat();
-        try {
-            Mat affine = Calib3d.estimateAffinePartial2D(
-                srcMat, dstMat, inliers, Calib3d.RANSAC, ransacThreshold);
-            if (affine == null || affine.empty() || affine.rows() != 2 || affine.cols() != 3) {
-                if (affine != null) affine.release();
-                throw new IllegalArgumentException("Could not estimate face affine transform");
-            }
-            return affine;
-        } finally {
-            inliers.release();
-            srcMat.release();
-            dstMat.release();
+        srcCx /= n;
+        srcCy /= n;
+        dstCx /= n;
+        dstCy /= n;
+
+        double srcNorm = 0.0;
+        double a = 0.0;
+        double b = 0.0;
+        for (int i = 0; i < n; i++) {
+            double sx = src[i][0] - srcCx;
+            double sy = src[i][1] - srcCy;
+            double dx = dst[i][0] - dstCx;
+            double dy = dst[i][1] - dstCy;
+            srcNorm += sx * sx + sy * sy;
+            a += sx * dx + sy * dy;
+            b += sx * dy - sy * dx;
         }
+        if (srcNorm < 1e-10) {
+            throw new IllegalArgumentException("Invalid face landmarks for alignment");
+        }
+
+        double m00 = a / srcNorm;
+        double m01 = -b / srcNorm;
+        double m10 = b / srcNorm;
+        double m11 = a / srcNorm;
+        double tx = dstCx - (m00 * srcCx + m01 * srcCy);
+        double ty = dstCy - (m10 * srcCx + m11 * srcCy);
+
+        Mat affine = new Mat(2, 3, CvType.CV_64FC1);
+        affine.put(0, 0, new double[]{m00, m01, tx, m10, m11, ty});
+        return affine;
+    }
+
+    /** Inverts a 2x3 affine matrix without relying on unavailable Android OpenCV APIs. */
+    private static Mat invertAffineTransform(Mat affine) {
+        double[] values = new double[6];
+        affine.get(0, 0, values);
+        double a = values[0];
+        double b = values[1];
+        double c = values[2];
+        double d = values[3];
+        double e = values[4];
+        double f = values[5];
+        double det = a * e - b * d;
+        if (Math.abs(det) < 1e-12) {
+            throw new IllegalArgumentException("Face affine transform is not invertible");
+        }
+
+        double ia = e / det;
+        double ib = -b / det;
+        double id = -d / det;
+        double ie = a / det;
+        double ic = (b * f - e * c) / det;
+        double iff = (d * c - a * f) / det;
+
+        Mat inverse = new Mat(2, 3, CvType.CV_64FC1);
+        inverse.put(0, 0, new double[]{ia, ib, ic, id, ie, iff});
+        return inverse;
     }
 
     private static float[][] unpackLandmarks(float[] landmarks) {
