@@ -37,8 +37,10 @@ public final class FaceParser {
 
     public float[] createMask(Bitmap alignedFace) {
         if (session == null || alignedFace == null) return null;
+        int outputWidth = alignedFace.getWidth();
+        int outputHeight = alignedFace.getHeight();
         Bitmap resized = alignedFace;
-        if (alignedFace.getWidth() != INPUT_SIZE || alignedFace.getHeight() != INPUT_SIZE) {
+        if (outputWidth != INPUT_SIZE || outputHeight != INPUT_SIZE) {
             resized = Bitmap.createScaledBitmap(alignedFace, INPUT_SIZE, INPUT_SIZE, true);
         }
         try {
@@ -71,8 +73,8 @@ public final class FaceParser {
                         mask[y * width + x] = isSwapRegion(bestClass) ? 1.0f : 0.0f;
                     }
                 }
-                if (width == INPUT_SIZE && height == INPUT_SIZE) return mask;
-                return resizeMaskNearest(mask, width, height, INPUT_SIZE, INPUT_SIZE);
+                if (width == outputWidth && height == outputHeight) return mask;
+                return resizeMaskNearest(mask, width, height, outputWidth, outputHeight);
             }
         } catch (Exception e) {
             Log.w(TAG, "Semantic face parsing failed; using geometric blend mask", e);
@@ -83,12 +85,10 @@ public final class FaceParser {
     }
 
     private boolean isSwapRegion(int label) {
-        // Swap facial skin/features while preserving the target eye interiors, glasses,
-        // hair and background. BiSeNet labels 4/5 are the left/right eye regions.
-        // Leaving those regions out keeps the original gaze, iris/sclera detail and
-        // tiny eyelash edges; the surrounding eyelid skin still swaps through label 1.
+        // Preserve target eye interiors, glasses, mouth cavity/teeth, hair and background.
+        // Swap facial skin, brows, nose and lips so identity still carries naturally.
         return label == 1 || label == 2 || label == 3
-            || label == 10 || label == 11 || label == 12 || label == 13;
+            || label == 10 || label == 12 || label == 13;
     }
 
     private float[] bitmapToInput(Bitmap bitmap) {
