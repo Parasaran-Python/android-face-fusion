@@ -1,0 +1,50 @@
+name: Bug Report
+description: Create a report to help us fix a defect or crash
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much detail as possible.
+  - type: input
+    id: version
+    attributes:
+      label: App Version / Commit SHA
+      description: What version or git commit of Android Face Fusion are you running?
+      placeholder: "e.g., v1.0.0 or commit abc1234"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device & OS
+      description: Device manufacturer, model, and Android OS version.
+      placeholder: "e.g., Google Pixel 8 Pro, Android 15"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Clear steps to trigger the bug.
+      placeholder: |
+        1. Open app
+        2. Select source image
+        3. Tap 'Swap Faces'
+        4. See crash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A concise explanation of what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logcat / Error Output
+      description: Paste relevant Android logcat or terminal stack traces.
+      render: shell

@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Assemble Release APK & App Bundle
+        run: ./gradlew assembleRelease bundleRelease --no-daemon
+
+      - name: Verify 16 KB Page Alignment Compliance
+        run: |
+          echo "Extracting release native libraries to verify 16 KB page-size compliance..."
+          mkdir -p /tmp/release_extracted
+          unzip -o app/build/outputs/apk/release/app-release-unsigned.apk "lib/*" -d /tmp/release_extracted
+
+          for so in $(find /tmp/release_extracted -name "*.so"); do
+            if [[ "$so" =~ (arm64-v8a|x86_64) ]]; then
+              echo "Checking 64-bit native library: $so"
+              non_aligned=$(readelf -W -l "$so" | awk '$1 == "LOAD" { align = $NF; if (align != "0x4000" && align != "0x10000" && align != "0x20000") print align }')
+              if [ -n "$non_aligned" ]; then
+                echo "::error file=$so::Found non-16KB aligned LOAD segments: $non_aligned"
+                exit 1
+              else
+                echo "  ✓ All LOAD segments >= 16 KB (0x4000+) aligned."
+              fi
+            fi
+          done
+          echo "All 64-bit native libraries verified for 16 KB page alignment!"
+
+      - name: Package Distribution Assets & Checksums
+        id: package_assets
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          mkdir -p release-dist
+          cp app/build/outputs/apk/release/app-release-unsigned.apk release-dist/AndroidFaceFusion-${TAG}-unsigned.apk
+          cp app/build/outputs/bundle/release/app-release.aab release-dist/AndroidFaceFusion-${TAG}.aab
+
+          cd release-dist
+          sha256sum AndroidFaceFusion-${TAG}-unsigned.apk AndroidFaceFusion-${TAG}.aab > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+
+      - name: Generate Release Summary
+        run: |
+          TAG="${{ steps.package_assets.outputs.tag }}"
+          echo "### 📦 Release Asset Manifest ($TAG)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size | SHA-256 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          for f in release-dist/*; do
+            if [ -f "$f" ]; then
+              fname=$(basename "$f")
+              fsize=$(ls -lh "$f" | awk '{print $5}')
+              fhash=$(sha256sum "$f" | awk '{print $1}')
+              echo "| \`$fname\` | $fsize | \`$fhash\` |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.package_assets.outputs.tag }}
+        run: |
+          gh release create "$TAG" release-dist/* \
+            --title "Android Face Fusion $TAG" \
+            --generate-notes \
+            --draft=false
