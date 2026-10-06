@@ -81,17 +81,20 @@ dependencies {
 val copyNdkLibCxxShared = tasks.register("copyNdkLibCxxShared") {
     description = "Copies 16 KB page-aligned libc++_shared.so from NDK into build intermediates across all host OS platforms"
     doLast {
+        // Read local.properties if available
+        val localPropsFile = project.rootDir.resolve("local.properties")
+        val localProps = if (localPropsFile.exists()) {
+            val props = Properties()
+            localPropsFile.inputStream().use { stream -> props.load(stream) }
+            props
+        } else null
+
         // 1. Resolve Android SDK directory reliably (reading local.properties first, then env vars)
         val sdkDir: File = run {
-            val localPropsFile = project.rootDir.resolve("local.properties")
-            if (localPropsFile.exists()) {
-                val props = Properties()
-                localPropsFile.inputStream().use { stream -> props.load(stream) }
-                val path = props.getProperty("sdk.dir")
-                if (!path.isNullOrBlank()) {
-                    val f = file(path)
-                    if (f.exists()) return@run f
-                }
+            val localSdk = localProps?.getProperty("sdk.dir")
+            if (!localSdk.isNullOrBlank()) {
+                val f = file(localSdk)
+                if (f.exists()) return@run f
             }
             val envSdk = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
             if (!envSdk.isNullOrBlank()) {
@@ -101,29 +104,68 @@ val copyNdkLibCxxShared = tasks.register("copyNdkLibCxxShared") {
             throw GradleException("Could not resolve Android SDK directory from local.properties or environment variables (ANDROID_HOME/ANDROID_SDK_ROOT).")
         }
 
-        // 2. Resolve NDK directory
+        // 2. Resolve NDK directory robustly across CI runners and local environments
         val ndkDir: File = run {
+            // Priority 1: ndk.dir in local.properties
+            val localNdk = localProps?.getProperty("ndk.dir")
+            if (!localNdk.isNullOrBlank()) {
+                val f = file(localNdk)
+                if (f.exists()) return@run f
+            }
+
+            // Priority 2: Configured android.ndkPath
             val configuredNdk = android.ndkPath
             if (!configuredNdk.isNullOrBlank()) {
                 val f = file(configuredNdk)
                 if (f.exists()) return@run f
             }
+
+            // Priority 3: Configured android.ndkVersion if present in $sdkDir/ndk/$version
             val version = android.ndkVersion
             if (!version.isNullOrBlank()) {
                 val f = sdkDir.resolve("ndk/$version")
                 if (f.exists()) return@run f
             }
+
+            // Priority 4: Standard NDK environment variables (pre-set on GitHub Actions and CI runners)
+            listOf("ANDROID_NDK_LATEST_HOME", "ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "ANDROID_NDK")
+                .mapNotNull { System.getenv(it) }
+                .filter { it.isNotBlank() }
+                .map { file(it) }
+                .firstOrNull { it.exists() }
+                ?.let { return@run it }
+
+            // Priority 5: Any installed NDK version in $sdkDir/ndk/ (pick highest version)
+            val ndkParent = sdkDir.resolve("ndk")
+            if (ndkParent.exists() && ndkParent.isDirectory) {
+                val installedNdks = ndkParent.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
+                if (!installedNdks.isNullOrEmpty()) {
+                    val latestNdk = installedNdks.maxByOrNull { it.name }
+                    if (latestNdk != null && latestNdk.exists()) {
+                        return@run latestNdk
+                    }
+                }
+            }
+
+            // Priority 6: Legacy ndk-bundle fallback
             val bundle = sdkDir.resolve("ndk-bundle")
             if (bundle.exists()) return@run bundle
-            throw GradleException("Could not resolve NDK directory in SDK path ${sdkDir.absolutePath} for NDK version ${android.ndkVersion}.")
+
+            throw GradleException(
+                "Could not resolve Android NDK directory in SDK path ${sdkDir.absolutePath} " +
+                "or from environment variables (ANDROID_NDK_LATEST_HOME, ANDROID_NDK_HOME, ANDROID_NDK_ROOT). " +
+                "Please install an NDK (r27 or newer recommended for 16 KB page-size compliance) or set ANDROID_NDK_HOME."
+            )
         }
+
+        project.logger.lifecycle("Using Android NDK at: ${ndkDir.absolutePath}")
 
         // 3. Resolve host prebuilt directory dynamically for cross-platform support (Linux, macOS, Windows)
         val prebuiltParent = ndkDir.resolve("toolchains/llvm/prebuilt")
         if (!prebuiltParent.exists() || !prebuiltParent.isDirectory) {
             throw GradleException("NDK LLVM prebuilt directory not found at ${prebuiltParent.absolutePath}.")
         }
-        val hostDirs = prebuiltParent.listFiles { f -> f.isDirectory }
+        val hostDirs = prebuiltParent.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
         if (hostDirs.isNullOrEmpty()) {
             throw GradleException("No host prebuilt directory found in ${prebuiltParent.absolutePath}.")
         }
