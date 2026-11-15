@@ -9,7 +9,7 @@ activity = "1.13.0"
 constraintlayout = "2.2.2"
 onnxruntime = "1.31.0"
 glide = "5.0.9"
-opencv = "5.0.0.1"
+opencv = "5.1.0"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
